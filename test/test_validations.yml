@@ -4,4 +4,6 @@ columns:
   - name: Second Column
     regex: ^.+$
   - name: Third Column
-    regex: ^[0-9]+$
+    regex: ^-?[0-9]+$
+    min: -23
+    max: 2000

@@ -5,14 +5,23 @@ use std::iter::zip;
 use std::path::Path;
 use csv::Reader;
 use flate2::bufread::GzDecoder;
-use log::info;
+use log::{debug, error, info};
 use pyo3::prelude::*;
 use regex::Regex;
 use yaml_rust2::YamlLoader;
+use crate::Validation::{RegularExpression};
 
-struct ColumnValidation {
+#[derive(Debug)]
+enum Validation {
+    RegularExpression(Regex),
+    Min(f64),
+    Max(f64),
+    None
+}
+
+struct ColumnValidations {
     column_name: String,
-    validation: Regex
+    validations: Vec<Validation>
 }
 
 /// Validate that CSV file complies with validations definition
@@ -30,32 +39,55 @@ fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
         info!("Columns names and order are correct");
     }
     else {
-        info!("Expected columns != Real columns");
+        error!("Expected columns != Real columns");
         return Ok(false);
     }
 
+    let mut is_valid_file = true;
     for result in rdr.records() {
         let record = result.unwrap();
         for next_column in zip(record.iter(), validations.iter()) {
             let value = next_column.0;
-            let column_name = &next_column.1.column_name;
-            let re = &next_column.1.validation;
-            if !re.is_match(value) {
-                info!("Column [{}] => Value {:?} doesn't match regex {:?}", column_name, value, re);
-                return Ok(false);
+            let _column_name = &next_column.1.column_name;
+            for validation in &next_column.1.validations {
+                let valid = apply_validation(value, validation);
+                if !valid {
+                    debug!("Column {}: Value {} isn't valid for {:?}",
+                        _column_name, value, validation);
+                }
+                is_valid_file = is_valid_file && valid;
             }
         }
     }
 
     info!("File matches the validations");
-    Ok(true)
+    Ok(is_valid_file)
+}
+
+fn apply_validation(value: &str, validation: &Validation) -> bool {
+    match validation {
+        RegularExpression(regex) => regex.is_match(value),
+        Validation::Min(min) => {
+            match value.parse::<f64>() {
+                Ok(value) => value >= *min,
+                Err(_) => false
+            }
+        },
+        Validation::Max(max) => {
+            match value.parse::<f64>() {
+                Ok(value) => value <= *max,
+                Err(_) => false
+            }
+        },
+        Validation::None => panic!("None validation cannot be applied")
+    }
 }
 
 /// Infers the file compression type and returns the corresponding buffered reader
 fn get_reader_from(path: &str) -> Reader<Box<dyn Read>> {
     let buf_reader = BufReader::new(File::open(Path::new(path)).unwrap());
     if is_gzip_file(path) {
-        info!("File is gzipped");
+        debug!("File is gzipped");
         let read_capacity = 10 * 1024_usize.pow(2);
         let reader = BufReader::with_capacity(read_capacity, GzDecoder::new(buf_reader));
         Reader::from_reader(Box::new(reader))
@@ -71,48 +103,54 @@ fn is_gzip_file(path: &str) -> bool {
     bytes[0] == 0x1f && bytes[1] == 0x8b
 }
 
-fn get_validations(definition_path: &str) -> Vec<ColumnValidation> {
+fn get_validations(definition_path: &str) -> Vec<ColumnValidations> {
     // Read the YAML definition with the validations
     let config =
         YamlLoader::load_from_str(fs::read_to_string(definition_path).unwrap().as_str()).unwrap();
     // Get the column names list and each associated validation
     let columns = &config[0]["columns"];
     let mut column_names = vec![];
-    let mut validations = vec![];
+    let mut column_validations = vec![];
     for column in columns.as_vec().unwrap() {
         let column_def = column.as_hash().unwrap();
         let mut name = "";
-        let mut regex = "";
-        for validation in column_def.iter() {
-            let key = validation.0.as_str().unwrap();
-            let value = validation.1.as_str().unwrap();
+        let mut validations = vec![];
+        for validation_definition in column_def.iter() {
+            let key = validation_definition.0.as_str().unwrap();
+            let value = validation_definition.1;
+            let mut validation: Validation = Validation::None;
+            match key {
+                "name" => { name = value.as_str().unwrap(); column_names.push(name); }
+                "regex" => { validation = Validation::RegularExpression(Regex::new(&value.as_str().unwrap()).unwrap()); }
+                "min" => { validation = Validation::Min(value.as_i64().unwrap() as f64); }
+                "max" => { validation = Validation::Max(value.as_i64().unwrap() as f64); }
+                _ => panic!("Unknown validation: {key}")
+            }
 
-            if key == "name" {
-                name = value;
-                column_names.push(name);
+            if key != "name" {
+                validations.push(validation);
             }
-            if key == "regex" {
-                regex = value;
-            }
+
         }
-        let new_validation = ColumnValidation { column_name: name.to_string(), validation: Regex::new(&regex).unwrap() };
-        validations.push(new_validation);
+        let new_validations = ColumnValidations { column_name: name.to_string(), validations: validations };
+        column_validations.push(new_validations);
     }
 
-    validations
+    column_validations
 }
 
-fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidation>) -> bool {
+fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidations>) -> bool {
     let column_names = validations.iter()
         .map(|v| v.column_name.clone())
         .collect::<Vec<String>>();
-    info!("Expected Column Names: {:?}", column_names);
+    debug!("Expected Column Names: {:?}", column_names);
 
     let headers: Vec<&str> = reader.headers().unwrap().iter().collect();
-    info!("Actual Column Names: {:?}", headers);
+    debug!("Actual Column Names: {:?}", headers);
 
     column_names == headers
 }
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -121,15 +159,18 @@ fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use simple_logger::SimpleLogger;
     use crate::validate;
 
     #[test]
-    fn test_validate_csv() {
+    fn init_logger() {
         SimpleLogger::new().init().unwrap();
+    }
+
+    #[test]
+    fn test_validate_csv() {
         assert!(validate("test/test_file.csv", "test/test_validations.yml").unwrap());
     }
 
