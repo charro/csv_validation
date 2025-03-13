@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -140,15 +141,31 @@ fn get_validations(definition_path: &str) -> Vec<ColumnValidations> {
 }
 
 fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidations>) -> bool {
-    let column_names = validations.iter()
+    let expected_column_names = validations.iter()
         .map(|v| v.column_name.clone())
         .collect::<Vec<String>>();
-    debug!("Expected Column Names: {:?}", column_names);
+    debug!("Expected Column Names: {:?}", expected_column_names);
 
-    let headers: Vec<&str> = reader.headers().unwrap().iter().collect();
+    let headers: Vec<String> = reader.headers().unwrap().iter().map(|s| String::from(s) ).collect();
     debug!("Actual Column Names: {:?}", headers);
 
-    column_names == headers
+    if expected_column_names != headers {
+        if expected_column_names.len() != headers.len() {
+            let expected_columns_set: HashSet<String> = expected_column_names.iter().cloned().collect();
+            let headers_set: HashSet<String> = headers.iter().cloned().collect();
+            debug!("File headers not in expected columns: {:?}", headers_set.difference(&expected_columns_set));
+            debug!("Columns in expected columns not in file headers: {:?}", expected_columns_set.difference(&headers_set));
+        }
+        else {
+            for (expected_column, header) in zip(expected_column_names, headers) {
+                if expected_column != header {
+                    debug!("{:?} != {:?}", expected_column, header);
+                }
+            }
+        }
+        return false
+    }
+    true
 }
 
 /// A Python module implemented in Rust.
@@ -177,5 +194,10 @@ mod tests {
     #[test]
     fn test_validate_csv_gz() {
         assert!(validate("test/test_file.csv.gz", "test/test_validations.yml").unwrap());
+    }
+
+    #[test]
+    fn test_wrong_headers() {
+        assert!(!validate("test/test_file.csv", "test/test_validations_wrong_headers.yml").unwrap());
     }
 }
