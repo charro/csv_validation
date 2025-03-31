@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -12,9 +12,9 @@ use regex::Regex;
 use yaml_rust2::YamlLoader;
 use crate::Validation::{RegularExpression};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Validation {
-    RegularExpression(Regex),
+    RegularExpression(String),
     Min(f64),
     Max(f64),
     None
@@ -31,6 +31,19 @@ fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
     info!("Validating file {} against definition {}", path, definition_path);
 
     let validations = get_validations(definition_path);
+
+    // Pre-Compile and save all Regex expressions to save time in execution
+    let mut regex_map = HashMap::new();
+    for column_validation in &validations {
+        for validation in &column_validation.validations {
+            match validation {
+                RegularExpression(regex) => {
+                    regex_map.insert(regex, Regex::new(regex.as_str()).unwrap());
+                },
+                _ => continue
+            }
+        }
+    }
 
     // Build the CSV reader
     let mut rdr = get_reader_from(path);
@@ -51,7 +64,7 @@ fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
             let value = next_column.0;
             let _column_name = &next_column.1.column_name;
             for validation in &next_column.1.validations {
-                let valid = apply_validation(value, validation);
+                let valid = apply_validation(value, validation, &regex_map);
                 if !valid {
                     debug!("Column {}: Value {} isn't valid for {:?}",
                         _column_name, value, validation);
@@ -65,9 +78,12 @@ fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
     Ok(is_valid_file)
 }
 
-fn apply_validation(value: &str, validation: &Validation) -> bool {
+fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<&String, Regex>) -> bool {
     match validation {
-        RegularExpression(regex) => regex.is_match(value),
+        RegularExpression(regex) => {
+            let regex = regex_map.get(regex).unwrap();
+            regex.is_match(value)
+        },
         Validation::Min(min) => {
             match value.parse::<f64>() {
                 Ok(value) => value >= *min,
@@ -122,7 +138,7 @@ fn get_validations(definition_path: &str) -> Vec<ColumnValidations> {
             let mut validation: Validation = Validation::None;
             match key {
                 "name" => { name = value.as_str().unwrap(); column_names.push(name); }
-                "regex" => { validation = Validation::RegularExpression(Regex::new(&value.as_str().unwrap()).unwrap()); }
+                "regex" => { validation = Validation::RegularExpression(String::from(value.as_str().unwrap())); }
                 "min" => { validation = Validation::Min(value.as_i64().unwrap() as f64); }
                 "max" => { validation = Validation::Max(value.as_i64().unwrap() as f64); }
                 _ => panic!("Unknown validation: {key}")
