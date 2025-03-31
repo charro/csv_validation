@@ -12,6 +12,8 @@ use regex::Regex;
 use yaml_rust2::YamlLoader;
 use crate::Validation::{RegularExpression};
 
+const MAX_SAMPLE_SIZE:u16 = 10;
+
 #[derive(Debug, Clone)]
 enum Validation {
     RegularExpression(String),
@@ -23,6 +25,17 @@ enum Validation {
 struct ColumnValidations {
     column_name: String,
     validations: Vec<Validation>
+}
+
+struct ValidationSummary {
+    validation: Validation,
+    wrong_rows: usize,
+    wrong_values_sample: Vec<String>
+}
+
+struct ColumnValidationsSummary {
+    column_name: String,
+    validation_summaries: Vec<ValidationSummary>
 }
 
 /// Validate that CSV file complies with validations definition
@@ -57,6 +70,8 @@ fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
         return Ok(false);
     }
 
+    // Second validation: If column names match, check if also the values match the validations
+    let mut validation_summaries_map = build_validation_summaries_map(&validations);
     let mut is_valid_file = true;
     for result in rdr.records() {
         let record = result.unwrap();
@@ -66,16 +81,65 @@ fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
             for validation in &next_column.1.validations {
                 let valid = apply_validation(value, validation, &regex_map);
                 if !valid {
-                    debug!("Column {}: Value {} isn't valid for {:?}",
-                        _column_name, value, validation);
+                    let validation_summary_list = validation_summaries_map.get_mut(_column_name).unwrap();
+                    let validation_summary = validation_summary_list
+                            .iter_mut()
+                            .find(|val_sum|
+                                std::mem::discriminant(&val_sum.validation) == std::mem::discriminant(validation)).unwrap();
+                    validation_summary.wrong_rows += 1;
+                    if validation_summary.wrong_values_sample.len() < MAX_SAMPLE_SIZE as usize {
+                        validation_summary.wrong_values_sample.push(value.to_string());
+                    }
                 }
                 is_valid_file = is_valid_file && valid;
             }
         }
     }
 
-    info!("File matches the validations");
+    // Fill the ColumnValidationSummary for each column
+    let mut column_validation_summaries = Vec::new();
+    for column_validation in &validations {
+        let validation_summary_for_column =
+            validation_summaries_map.remove(&column_validation.column_name).unwrap();
+        let column_validation_summary = ColumnValidationsSummary {
+            column_name: column_validation.column_name.clone(),
+            validation_summaries: validation_summary_for_column
+        };
+        column_validation_summaries.push(column_validation_summary);
+    }
+
+    debug!("VALIDATIONS SUMMARY");
+    debug!("==================================================================================");
+    for column_validation_summary in column_validation_summaries {
+        debug!("Column: '{}'", column_validation_summary.column_name);
+        for validation_summary in column_validation_summary.validation_summaries {
+            debug!("\tValidation {:?} => Wrong Rows: {} | Wrong Values Sample: {:?}", &validation_summary.validation,
+                &validation_summary.wrong_rows, &validation_summary.wrong_values_sample);
+        }
+    }
+
+    if is_valid_file {
+        info!("OK: File matches the validations");
+    }
+    else {
+        info!("NO OK: File DOESN'T match validations");
+    }
     Ok(is_valid_file)
+}
+
+fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashMap<String, Vec<ValidationSummary>> {
+    let mut validation_summaries_map = HashMap::new();
+    for validation in validations {
+        let mut validation_summaries = Vec::new();
+        for column_validation in &validation.validations {
+            let validation_summary =
+                ValidationSummary{validation: (*column_validation).clone(), wrong_rows: 0, wrong_values_sample: Vec::new()};
+            validation_summaries.push(validation_summary);
+        }
+        validation_summaries_map.insert(validation.column_name.clone(), validation_summaries);
+    }
+
+    validation_summaries_map
 }
 
 fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<&String, Regex>) -> bool {
