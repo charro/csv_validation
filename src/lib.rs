@@ -38,12 +38,18 @@ struct ColumnValidationsSummary {
     validation_summaries: Vec<ValidationSummary>
 }
 
-/// Validate that CSV file complies with validations definition
 #[pyfunction]
-fn validate(path: &str, definition_path: &str) -> PyResult<bool> {
-    info!("Validating file {} against definition {}", path, definition_path);
+fn validate_with_file(path: &str, definition_path: &str) -> PyResult<bool> {
+    info!("Validating file {} against definition file {}", path, definition_path);
+    let definition_string = fs::read_to_string(definition_path).unwrap();
+    validate(path, definition_string)
+}
 
-    let validations = get_validations(definition_path);
+/// Validate that CSV file complies with a validations definition file
+#[pyfunction]
+fn validate(path: &str, definition_string: String) -> PyResult<bool> {
+    debug!("Validating file {} against definition:\n {}", path, definition_string);
+    let validations = get_validations(definition_string.as_str());
 
     // Pre-Compile and save all Regex expressions to save time in execution
     let mut regex_map = HashMap::new();
@@ -184,10 +190,9 @@ fn is_gzip_file(path: &str) -> bool {
     bytes[0] == 0x1f && bytes[1] == 0x8b
 }
 
-fn get_validations(definition_path: &str) -> Vec<ColumnValidations> {
+fn get_validations(definition_string: &str) -> Vec<ColumnValidations> {
     // Read the YAML definition with the validations
-    let config =
-        YamlLoader::load_from_str(fs::read_to_string(definition_path).unwrap().as_str()).unwrap();
+    let config = YamlLoader::load_from_str(definition_string).unwrap();
     // Get the column names list and each associated validation
     let columns = &config[0]["columns"];
     let mut column_names = vec![];
@@ -253,13 +258,14 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
 fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
     m.add_function(wrap_pyfunction!(validate, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_with_file, m)?)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use simple_logger::SimpleLogger;
-    use crate::validate;
+    use crate::{validate, validate_with_file};
 
     #[test]
     fn init_logger() {
@@ -267,17 +273,41 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_csv() {
-        assert!(validate("test/test_file.csv", "test/test_validations.yml").unwrap());
+    fn test_validate_csv_with_file() {
+        assert!(validate_with_file("test/test_file.csv", "test/test_validations.yml").unwrap());
     }
 
     #[test]
-    fn test_validate_csv_gz() {
-        assert!(validate("test/test_file.csv.gz", "test/test_validations.yml").unwrap());
+    fn test_validate_csv_gz_with_file() {
+        assert!(validate_with_file("test/test_file.csv.gz", "test/test_validations.yml").unwrap());
     }
 
     #[test]
     fn test_wrong_headers() {
-        assert!(!validate("test/test_file.csv", "test/test_validations_wrong_headers.yml").unwrap());
+        let definition = String::from("
+            columns:
+              - name: First Column
+              - name: Second Column
+              - name: Wrong Column
+              - name: Expected Column Not In File
+        ");
+        assert!(!validate("test/test_file.csv", definition).unwrap());
+    }
+
+    #[test]
+    fn test_validate_csv() {
+        let definition = String::from("
+            columns:
+              - name: First Column
+                regex: ^.+$
+              - name: Second Column
+                regex: ^.+$
+              - name: Third Column
+                regex: ^-?[0-9]+$
+                min: -23
+                max: 2000
+        ");
+
+        assert!(validate("test/test_file.csv", definition).unwrap());
     }
 }
