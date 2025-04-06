@@ -1,3 +1,4 @@
+use crate::Validation::Values;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
@@ -19,6 +20,7 @@ enum Validation {
     RegularExpression(String),
     Min(f64),
     Max(f64),
+    Values(Vec<String>),
     None
 }
 
@@ -57,7 +59,11 @@ fn validate(path: &str, definition_string: String) -> PyResult<bool> {
         for validation in &column_validation.validations {
             match validation {
                 RegularExpression(regex) => {
-                    regex_map.insert(regex, Regex::new(regex.as_str()).unwrap());
+                    regex_map.insert(regex.to_string(), Regex::new(regex.as_str()).unwrap());
+                },
+                Values(values) => {
+                    let regex_str = get_regex_string_for_values(values);
+                    regex_map.insert(regex_str.clone(), Regex::new(regex_str.as_str()).unwrap());
                 },
                 _ => continue
             }
@@ -148,7 +154,7 @@ fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashM
     validation_summaries_map
 }
 
-fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<&String, Regex>) -> bool {
+fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<String, Regex>) -> bool {
     match validation {
         RegularExpression(regex) => {
             let regex = regex_map.get(regex).unwrap();
@@ -166,8 +172,17 @@ fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<&S
                 Err(_) => false
             }
         },
-        Validation::None => panic!("None validation cannot be applied")
+        Validation::Values(values) => {
+            let regex_str = get_regex_string_for_values(values);
+            let regex = regex_map.get(&regex_str).unwrap();
+            regex.is_match(value)
+        }
+        Validation::None => panic!("Validation of type 'None' cannot be applied")
     }
+}
+
+fn get_regex_string_for_values(values: &Vec<String>) -> String {
+    values.join("|")
 }
 
 /// Infers the file compression type and returns the corresponding buffered reader
@@ -210,6 +225,13 @@ fn get_validations(definition_string: &str) -> Vec<ColumnValidations> {
                 "regex" => { validation = Validation::RegularExpression(String::from(value.as_str().unwrap())); }
                 "min" => { validation = Validation::Min(value.as_i64().unwrap() as f64); }
                 "max" => { validation = Validation::Max(value.as_i64().unwrap() as f64); }
+                "values" => {
+                    validation = Validation::Values(value.as_vec().unwrap()
+                        .iter()
+                        .map(|v| String::from(v.as_str().unwrap()))
+                        .collect()
+                    );
+                }
                 _ => panic!("Unknown validation: {key}")
             }
 
@@ -301,7 +323,7 @@ mod tests {
               - name: First Column
                 regex: ^.+$
               - name: Second Column
-                regex: ^.+$
+                values: [one_value, or_another]
               - name: Third Column
                 regex: ^-?[0-9]+$
                 min: -23
