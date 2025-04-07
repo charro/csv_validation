@@ -8,6 +8,7 @@ use std::path::Path;
 use csv::Reader;
 use flate2::bufread::GzDecoder;
 use log::{debug, error, info};
+use pyo3::exceptions::{PyRuntimeError};
 use pyo3::prelude::*;
 use regex::Regex;
 use yaml_rust2::YamlLoader;
@@ -43,7 +44,7 @@ struct ColumnValidationsSummary {
 #[pyfunction]
 fn validate_with_file(path: &str, definition_path: &str) -> PyResult<bool> {
     info!("Validating file {} against definition file {}", path, definition_path);
-    let definition_string = fs::read_to_string(definition_path).unwrap();
+    let definition_string = fs::read_to_string(definition_path)?;
     validate(path, definition_string)
 }
 
@@ -51,7 +52,7 @@ fn validate_with_file(path: &str, definition_path: &str) -> PyResult<bool> {
 #[pyfunction]
 fn validate(path: &str, definition_string: String) -> PyResult<bool> {
     debug!("Validating file {} against definition:\n {}", path, definition_string);
-    let validations = get_validations(definition_string.as_str());
+    let validations = get_validations(definition_string.as_str())?;
 
     // Pre-Compile and save all Regex expressions to save time in execution
     let mut regex_map = HashMap::new();
@@ -71,10 +72,10 @@ fn validate(path: &str, definition_string: String) -> PyResult<bool> {
     }
 
     // Build the CSV reader
-    let mut rdr = get_reader_from(path);
+    let mut rdr = get_reader_from(path)?;
 
     // First validation: Ensure column names and order are exactly as expected
-    if validate_column_names(&mut rdr, &validations) {
+    if validate_column_names(&mut rdr, &validations)? {
         info!("Columns names and order are correct");
     }
     else {
@@ -91,7 +92,7 @@ fn validate(path: &str, definition_string: String) -> PyResult<bool> {
             let value = next_column.0;
             let _column_name = &next_column.1.column_name;
             for validation in &next_column.1.validations {
-                let valid = apply_validation(value, validation, &regex_map);
+                let valid = apply_validation(value, validation, &regex_map)?;
                 if !valid {
                     let validation_summary_list = validation_summaries_map.get_mut(_column_name).unwrap();
                     let validation_summary = validation_summary_list
@@ -154,30 +155,30 @@ fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashM
     validation_summaries_map
 }
 
-fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<String, Regex>) -> bool {
+fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<String, Regex>) -> PyResult<bool> {
     match validation {
         RegularExpression(regex) => {
             let regex = regex_map.get(regex).unwrap();
-            regex.is_match(value)
+            Ok(regex.is_match(value))
         },
         Validation::Min(min) => {
             match value.parse::<f64>() {
-                Ok(value) => value >= *min,
-                Err(_) => false
+                Ok(value) => Ok(value >= *min),
+                Err(_) => Ok(false)
             }
         },
         Validation::Max(max) => {
             match value.parse::<f64>() {
-                Ok(value) => value <= *max,
-                Err(_) => false
+                Ok(value) => Ok(value <= *max),
+                Err(_) => Ok(false)
             }
         },
         Validation::Values(values) => {
             let regex_str = get_regex_string_for_values(values);
             let regex = regex_map.get(&regex_str).unwrap();
-            regex.is_match(value)
+            Ok(regex.is_match(value))
         }
-        Validation::None => panic!("Validation of type 'None' cannot be applied")
+        Validation::None => Err(PyRuntimeError::new_err("'None' validation has no implementation"))
     }
 }
 
@@ -186,26 +187,26 @@ fn get_regex_string_for_values(values: &Vec<String>) -> String {
 }
 
 /// Infers the file compression type and returns the corresponding buffered reader
-fn get_reader_from(path: &str) -> Reader<Box<dyn Read>> {
-    let buf_reader = BufReader::new(File::open(Path::new(path)).unwrap());
-    if is_gzip_file(path) {
+fn get_reader_from(path: &str) -> PyResult<Reader<Box<dyn Read>>> {
+    let buf_reader = BufReader::new(File::open(Path::new(path))?);
+    if is_gzip_file(path)? {
         debug!("File is gzipped");
         let read_capacity = 10 * 1024_usize.pow(2);
         let reader = BufReader::with_capacity(read_capacity, GzDecoder::new(buf_reader));
-        Reader::from_reader(Box::new(reader))
+        Ok(Reader::from_reader(Box::new(reader)))
     }
     else {
-        Reader::from_reader(Box::new(buf_reader))
+        Ok(Reader::from_reader(Box::new(buf_reader)))
     }
 }
 
-fn is_gzip_file(path: &str) -> bool {
+fn is_gzip_file(path: &str) -> PyResult<bool> {
     let mut bytes = [0u8; 2];
-    File::open(Path::new(path)).unwrap().read_exact(&mut bytes).unwrap();
-    bytes[0] == 0x1f && bytes[1] == 0x8b
+    File::open(Path::new(path))?.read_exact(&mut bytes)?;
+    Ok(bytes[0] == 0x1f && bytes[1] == 0x8b)
 }
 
-fn get_validations(definition_string: &str) -> Vec<ColumnValidations> {
+fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> {
     // Read the YAML definition with the validations
     let config = YamlLoader::load_from_str(definition_string).unwrap();
     // Get the column names list and each associated validation
@@ -219,21 +220,20 @@ fn get_validations(definition_string: &str) -> Vec<ColumnValidations> {
         for validation_definition in column_def.iter() {
             let key = validation_definition.0.as_str().unwrap();
             let value = validation_definition.1;
-            let mut validation: Validation = Validation::None;
-            match key {
-                "name" => { name = value.as_str().unwrap(); column_names.push(name); }
-                "regex" => { validation = Validation::RegularExpression(String::from(value.as_str().unwrap())); }
-                "min" => { validation = Validation::Min(value.as_i64().unwrap() as f64); }
-                "max" => { validation = Validation::Max(value.as_i64().unwrap() as f64); }
-                "values" => {
-                    validation = Validation::Values(value.as_vec().unwrap()
-                        .iter()
-                        .map(|v| String::from(v.as_str().unwrap()))
-                        .collect()
-                    );
-                }
-                _ => panic!("Unknown validation: {key}")
-            }
+            let validation = match key {
+                    "name" => { name = value.as_str().unwrap(); column_names.push(name); Ok(Validation::None) }
+                    "regex" => { Ok(Validation::RegularExpression(String::from(value.as_str().unwrap()))) }
+                    "min" => { Ok(Validation::Min(value.as_i64().unwrap() as f64)) }
+                    "max" => { Ok(Validation::Max(value.as_i64().unwrap() as f64)) }
+                    "values" => {
+                        Ok(Validation::Values(value.as_vec().unwrap()
+                            .iter()
+                            .map(|v| String::from(v.as_str().unwrap()))
+                            .collect()
+                        ))
+                    }
+                    _ => Err(PyRuntimeError::new_err("Unknown validation: {key}"))
+                }?;
 
             if key != "name" {
                 validations.push(validation);
@@ -244,10 +244,10 @@ fn get_validations(definition_string: &str) -> Vec<ColumnValidations> {
         column_validations.push(new_validations);
     }
 
-    column_validations
+    Ok(column_validations)
 }
 
-fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidations>) -> bool {
+fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidations>) -> PyResult<bool> {
     let expected_column_names = validations.iter()
         .map(|v| v.column_name.clone())
         .collect::<Vec<String>>();
@@ -270,9 +270,9 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
                 }
             }
         }
-        return false
+        return Ok(false)
     }
-    true
+    Ok(true)
 }
 
 /// A Python module implemented in Rust.
