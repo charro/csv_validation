@@ -12,11 +12,12 @@ use pyo3::exceptions::{PyRuntimeError};
 use pyo3::prelude::*;
 use regex::Regex;
 use yaml_rust2::YamlLoader;
+use serde::{Deserialize, Serialize};
 use crate::Validation::{RegularExpression};
 
 const MAX_SAMPLE_SIZE:u16 = 10;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 enum Validation {
     RegularExpression(String),
     Min(f64),
@@ -30,12 +31,14 @@ struct ColumnValidations {
     validations: Vec<Validation>
 }
 
+#[derive(Serialize, Deserialize)]
 struct ValidationSummary {
     validation: Validation,
     wrong_rows: usize,
     wrong_values_sample: Vec<String>
 }
 
+#[derive(Serialize, Deserialize)]
 struct ColumnValidationsSummary {
     column_name: String,
     validation_summaries: Vec<ValidationSummary>
@@ -121,13 +124,20 @@ fn validate(path: &str, definition_string: String) -> PyResult<bool> {
         column_validation_summaries.push(column_validation_summary);
     }
 
+    let validation_result_json = serde_json::to_string(&column_validation_summaries).unwrap();
+
     debug!("VALIDATIONS SUMMARY");
     debug!("==================================================================================");
     for column_validation_summary in column_validation_summaries {
         debug!("Column: '{}'", column_validation_summary.column_name);
         for validation_summary in column_validation_summary.validation_summaries {
-            debug!("\tValidation {:?} => Wrong Rows: {} | Wrong Values Sample: {:?}", &validation_summary.validation,
-                &validation_summary.wrong_rows, &validation_summary.wrong_values_sample);
+            let wrong_values_sample = if validation_summary.wrong_values_sample.len() > 0 {
+                    format!(" | Wrong Values Sample: {:?}", validation_summary.wrong_values_sample)
+            } else {
+                String::from("" )
+            };
+            debug!("\tValidation {:?} => Wrong Rows: {}{}", validation_summary.validation,
+                validation_summary.wrong_rows, wrong_values_sample);
         }
     }
 
