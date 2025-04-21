@@ -19,7 +19,7 @@ const MAX_SAMPLE_SIZE:u16 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Validation {
-    RegularExpression(String),
+    RegularExpression { expression: String, alias: String },
     Min(f64),
     Max(f64),
     Values(Vec<String>),
@@ -62,8 +62,8 @@ fn validate(path: &str, definition_string: String) -> PyResult<bool> {
     for column_validation in &validations {
         for validation in &column_validation.validations {
             match validation {
-                RegularExpression(regex) => {
-                    regex_map.insert(regex.to_string(), Regex::new(regex.as_str()).unwrap());
+                RegularExpression { expression, alias: _ } => {
+                    regex_map.insert(expression.to_string(), Regex::new(expression.as_str()).unwrap());
                 },
                 Values(values) => {
                     let regex_str = get_regex_string_for_values(values);
@@ -167,8 +167,8 @@ fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashM
 
 fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<String, Regex>) -> PyResult<bool> {
     match validation {
-        RegularExpression(regex) => {
-            let regex = regex_map.get(regex).unwrap();
+        RegularExpression { expression: exp, alias: _ } => {
+            let regex = regex_map.get(exp).unwrap();
             Ok(regex.is_match(value))
         },
         Validation::Min(min) => {
@@ -225,14 +225,18 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
     let mut column_validations = vec![];
     for column in columns.as_vec().unwrap() {
         let column_def = column.as_hash().unwrap();
-        let mut name = "";
+        let mut column_name = "";
         let mut validations = vec![];
         for validation_definition in column_def.iter() {
             let key = validation_definition.0.as_str().unwrap();
             let value = validation_definition.1;
             let validation = match key {
-                    "name" => { name = value.as_str().unwrap(); column_names.push(name); Ok(Validation::None) }
-                    "regex" => { Ok(Validation::RegularExpression(String::from(value.as_str().unwrap()))) }
+                    "name" => {
+                        column_name = value.as_str().unwrap();
+                        column_names.push(column_name);
+                        Ok(Validation::None)
+                    }
+                    "regex" => { Ok(Validation::RegularExpression { expression: String::from(value.as_str().unwrap()), alias: String::from("regex") }) }
                     "min" => { Ok(Validation::Min(value.as_i64().unwrap() as f64)) }
                     "max" => { Ok(Validation::Max(value.as_i64().unwrap() as f64)) }
                     "values" => {
@@ -242,7 +246,12 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
                             .collect()
                         ))
                     }
-                    _ => Err(PyRuntimeError::new_err("Unknown validation: {key}"))
+                    "format" => {
+                        let format = value.as_str().unwrap();
+                        let regex_for_format = get_regex_for_format(format)?;
+                        Ok(Validation::RegularExpression { expression: regex_for_format, alias: format.to_string() })
+                    }
+                    _ => Err(PyRuntimeError::new_err(format!("Unknown validation: {key}")))
                 }?;
 
             if key != "name" {
@@ -250,11 +259,19 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
             }
 
         }
-        let new_validations = ColumnValidations { column_name: name.to_string(), validations: validations };
+        let new_validations = ColumnValidations { column_name: column_name.to_string(), validations: validations };
         column_validations.push(new_validations);
     }
 
     Ok(column_validations)
+}
+
+fn get_regex_for_format(format: &str) -> PyResult<String> {
+    match format {
+        "integer" => Ok(String::from("^-?\\d+$")),
+        "positive integer" => Ok(String::from("^\\d+$")),
+        _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
+    }
 }
 
 fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidations>) -> PyResult<bool> {
@@ -324,6 +341,18 @@ mod tests {
               - name: Expected Column Not In File
         ");
         assert!(!validate("test/test_file.csv", definition).unwrap());
+    }
+
+    #[test]
+    fn test_format_validation() {
+        let definition = String::from("
+            columns:
+              - name: First Column
+              - name: Second Column
+              - name: Third Column
+                format: integer
+        ");
+        assert!(validate("test/test_file.csv", definition).unwrap());
     }
 
     #[test]
