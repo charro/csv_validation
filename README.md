@@ -60,6 +60,10 @@ columns:
     regex: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$  # Standard email format
   - name: Phone
     regex: ^\+?[0-9]{10,15}$  # International phone format with optional +
+  - name: Status
+    values: [active, inactive, pending, suspended]  # Only these values are allowed
+  - name: Gender
+    values: [M, F, NB, O]  # M: Male, F: Female, NB: Non-Binary, O: Other
 ```
 
 ## Validation Types
