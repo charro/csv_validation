@@ -25,15 +25,6 @@ This is a Python lib with a Rust core that will allow you to validate huge CSV f
 pip install csv_validation
 ```
 
-### Rust
-
-Add this to your `Cargo.toml`:
-
-```toml
-[dependencies]
-csv_validation = "0.0.6"
-```
-
 ## Usage
 
 ### Python
