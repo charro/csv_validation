@@ -26,6 +26,7 @@ enum Validation {
     None
 }
 
+#[derive(Clone)]
 struct ColumnValidations {
     column_name: String,
     validations: Vec<Validation>
@@ -42,112 +43,6 @@ struct ValidationSummary {
 struct ColumnValidationsSummary {
     column_name: String,
     validation_summaries: Vec<ValidationSummary>
-}
-
-#[pyfunction]
-fn validate_with_file(path: &str, definition_path: &str) -> PyResult<bool> {
-    info!("Validating file {} against definition file {}", path, definition_path);
-    let definition_string = fs::read_to_string(definition_path)?;
-    validate(path, definition_string)
-}
-
-/// Validate that CSV file complies with a validations definition file
-#[pyfunction]
-fn validate(path: &str, definition_string: String) -> PyResult<bool> {
-    debug!("Validating file {} against definition:\n {}", path, definition_string);
-    let validations = get_validations(definition_string.as_str())?;
-
-    // Pre-Compile and save all Regex expressions to save time in execution
-    let mut regex_map = HashMap::new();
-    for column_validation in &validations {
-        for validation in &column_validation.validations {
-            match validation {
-                RegularExpression { expression, alias: _ } => {
-                    regex_map.insert(expression.to_string(), Regex::new(expression.as_str()).unwrap());
-                },
-                Values(values) => {
-                    let regex_str = get_regex_string_for_values(values);
-                    regex_map.insert(regex_str.clone(), Regex::new(regex_str.as_str()).unwrap());
-                },
-                _ => continue
-            }
-        }
-    }
-
-    // Build the CSV reader
-    let mut rdr = get_reader_from(path)?;
-
-    // First validation: Ensure column names and order are exactly as expected
-    if validate_column_names(&mut rdr, &validations)? {
-        info!("Columns names and order are correct");
-    }
-    else {
-        error!("Expected columns != Real columns");
-        return Ok(false);
-    }
-
-    // Second validation: If column names match, check if also the values match the validations
-    let mut validation_summaries_map = build_validation_summaries_map(&validations);
-    let mut is_valid_file = true;
-    for result in rdr.records() {
-        let record = result.unwrap();
-        for next_column in zip(record.iter(), validations.iter()) {
-            let value = next_column.0;
-            let _column_name = &next_column.1.column_name;
-            for validation in &next_column.1.validations {
-                let valid = apply_validation(value, validation, &regex_map)?;
-                if !valid {
-                    let validation_summary_list = validation_summaries_map.get_mut(_column_name).unwrap();
-                    let validation_summary = validation_summary_list
-                            .iter_mut()
-                            .find(|val_sum|
-                                std::mem::discriminant(&val_sum.validation) == std::mem::discriminant(validation)).unwrap();
-                    validation_summary.wrong_rows += 1;
-                    if validation_summary.wrong_values_sample.len() < MAX_SAMPLE_SIZE as usize {
-                        validation_summary.wrong_values_sample.push(value.to_string());
-                    }
-                }
-                is_valid_file = is_valid_file && valid;
-            }
-        }
-    }
-
-    // Fill the ColumnValidationSummary for each column
-    let mut column_validation_summaries = Vec::new();
-    for column_validation in &validations {
-        let validation_summary_for_column =
-            validation_summaries_map.remove(&column_validation.column_name).unwrap();
-        let column_validation_summary = ColumnValidationsSummary {
-            column_name: column_validation.column_name.clone(),
-            validation_summaries: validation_summary_for_column
-        };
-        column_validation_summaries.push(column_validation_summary);
-    }
-
-    let validation_result_json = serde_json::to_string(&column_validation_summaries).unwrap();
-
-    debug!("VALIDATIONS SUMMARY");
-    debug!("==================================================================================");
-    for column_validation_summary in column_validation_summaries {
-        debug!("Column: '{}'", column_validation_summary.column_name);
-        for validation_summary in column_validation_summary.validation_summaries {
-            let wrong_values_sample = if validation_summary.wrong_values_sample.len() > 0 {
-                    format!(" | Wrong Values Sample: {:?}", validation_summary.wrong_values_sample)
-            } else {
-                String::from("" )
-            };
-            debug!("\tValidation {:?} => Wrong Rows: {}{}", validation_summary.validation,
-                validation_summary.wrong_rows, wrong_values_sample);
-        }
-    }
-
-    if is_valid_file {
-        info!("OK: File matches the validations");
-    }
-    else {
-        info!("NO OK: File DOESN'T match validations");
-    }
-    Ok(is_valid_file)
 }
 
 fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashMap<String, Vec<ValidationSummary>> {
@@ -218,48 +113,97 @@ fn is_gzip_file(path: &str) -> PyResult<bool> {
 
 fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> {
     // Read the YAML definition with the validations
-    let config = YamlLoader::load_from_str(definition_string).unwrap();
-    // Get the column names list and each associated validation
+    let config = YamlLoader::load_from_str(definition_string)
+        .map_err(|e| PyRuntimeError::new_err(format!("Invalid YAML format: {}", e)))?;
+    
+    if config.is_empty() {
+        return Err(PyRuntimeError::new_err("Empty YAML definition"));
+    }
+
     let columns = &config[0]["columns"];
+    if !columns.is_array() {
+        return Err(PyRuntimeError::new_err("Invalid YAML: 'columns' key must be an array"));
+    }
+
+    let columns_vec = columns.as_vec()
+        .ok_or_else(|| PyRuntimeError::new_err("Invalid YAML: 'columns' must be an array"))?;
+
+    if columns_vec.is_empty() {
+        return Err(PyRuntimeError::new_err("No columns defined in YAML"));
+    }
+
     let mut column_names = vec![];
     let mut column_validations = vec![];
-    for column in columns.as_vec().unwrap() {
-        let column_def = column.as_hash().unwrap();
+
+    for column in columns_vec {
+        let column_def = column.as_hash()
+            .ok_or_else(|| PyRuntimeError::new_err("Invalid YAML: each column must be a mapping"))?;
+        
         let mut column_name = "";
         let mut validations = vec![];
+
         for validation_definition in column_def.iter() {
-            let key = validation_definition.0.as_str().unwrap();
+            let key = validation_definition.0.as_str()
+                .ok_or_else(|| PyRuntimeError::new_err("Invalid YAML: validation key must be a string"))?;
             let value = validation_definition.1;
+            
             let validation = match key {
-                    "name" => {
-                        column_name = value.as_str().unwrap();
-                        column_names.push(column_name);
-                        Ok(Validation::None)
-                    }
-                    "regex" => { Ok(Validation::RegularExpression { expression: String::from(value.as_str().unwrap()), alias: String::from("regex") }) }
-                    "min" => { Ok(Validation::Min(value.as_i64().unwrap() as f64)) }
-                    "max" => { Ok(Validation::Max(value.as_i64().unwrap() as f64)) }
-                    "values" => {
-                        Ok(Validation::Values(value.as_vec().unwrap()
-                            .iter()
-                            .map(|v| String::from(v.as_str().unwrap()))
-                            .collect()
-                        ))
-                    }
-                    "format" => {
-                        let format = value.as_str().unwrap();
-                        let regex_for_format = get_regex_for_format(format)?;
-                        Ok(Validation::RegularExpression { expression: regex_for_format, alias: format.to_string() })
-                    }
-                    _ => Err(PyRuntimeError::new_err(format!("Unknown validation: {key}")))
-                }?;
+                "name" => {
+                    column_name = value.as_str()
+                        .ok_or_else(|| PyRuntimeError::new_err("Column name must be a string"))?;
+                    column_names.push(column_name);
+                    Ok(Validation::None)
+                }
+                "regex" => {
+                    let expr = value.as_str()
+                        .ok_or_else(|| PyRuntimeError::new_err("Regex must be a string"))?;
+                    Ok(Validation::RegularExpression { 
+                        expression: String::from(expr), 
+                        alias: String::from("regex") 
+                    })
+                }
+                "min" => {
+                    let num = value.as_i64()
+                        .ok_or_else(|| PyRuntimeError::new_err("Min value must be a number"))?;
+                    Ok(Validation::Min(num as f64))
+                }
+                "max" => {
+                    let num = value.as_i64()
+                        .ok_or_else(|| PyRuntimeError::new_err("Max value must be a number"))?;
+                    Ok(Validation::Max(num as f64))
+                }
+                "values" => {
+                    let values = value.as_vec()
+                        .ok_or_else(|| PyRuntimeError::new_err("Values must be an array"))?
+                        .iter()
+                        .map(|v| v.as_str()
+                            .ok_or_else(|| PyRuntimeError::new_err("Each value in values array must be a string"))
+                            .map(String::from))
+                        .collect::<Result<Vec<String>, _>>()?;
+                    Ok(Validation::Values(values))
+                }
+                "format" => {
+                    let format = value.as_str()
+                        .ok_or_else(|| PyRuntimeError::new_err("Format must be a string"))?;
+                    let regex_for_format = get_regex_for_format(format)?;
+                    Ok(Validation::RegularExpression { 
+                        expression: regex_for_format, 
+                        alias: format.to_string() 
+                    })
+                }
+                _ => Err(PyRuntimeError::new_err(format!("Unknown validation: {key}")))
+            }?;
 
             if key != "name" {
                 validations.push(validation);
             }
-
         }
-        let new_validations = ColumnValidations { column_name: column_name.to_string(), validations: validations };
+
+        if column_name.is_empty() {
+            return Err(PyRuntimeError::new_err("Each column must have a name"));
+        }
+
+        let new_validations = ColumnValidations { column_name: column_name.to_string(), validations };
         column_validations.push(new_validations);
     }
 
@@ -269,7 +213,7 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
 fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
         "integer" => Ok(String::from("^-?\\d+$")),
-        "positive integer" => Ok(String::from("^\\d+$")),
+        "positive_integer" => Ok(String::from("^\\d+$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
     }
 }
@@ -302,10 +246,151 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
     Ok(true)
 }
 
+#[pyclass]
+struct CSVValidator {
+    validations: Vec<ColumnValidations>,
+    regex_map: HashMap<String, Regex>
+}
+
+#[pymethods]
+impl CSVValidator {
+    #[new]
+    fn new() -> Self {
+        CSVValidator {
+            validations: Vec::new(),
+            regex_map: HashMap::new()
+        }
+    }
+
+    #[staticmethod]
+    fn from_file(definition_path: &str) -> PyResult<Self> {
+        let definition_string = fs::read_to_string(definition_path)?;
+        Self::from_string(&definition_string)
+    }
+
+    #[staticmethod]
+    fn from_string(definition_string: &str) -> PyResult<Self> {
+        let validations = get_validations(definition_string)?;
+        let mut regex_map = HashMap::new();
+        
+        // Pre-Compile and save all Regex expressions
+        for column_validation in &validations {
+            for validation in &column_validation.validations {
+                match validation {
+                    RegularExpression { expression, alias: _ } => {
+                        regex_map.insert(expression.to_string(), Regex::new(expression.as_str()).unwrap());
+                    },
+                    Values(values) => {
+                        let regex_str = get_regex_string_for_values(values);
+                        regex_map.insert(regex_str.clone(), Regex::new(regex_str.as_str()).unwrap());
+                    },
+                    _ => continue
+                }
+            }
+        }
+
+        Ok(CSVValidator { validations, regex_map })
+    }
+
+    fn validate(&self, file_path: &str) -> PyResult<bool> {
+        // Build the CSV reader
+        let mut rdr = get_reader_from(file_path)?;
+
+        // First validation: Ensure column names and order are exactly as expected
+        if validate_column_names(&mut rdr, &self.validations)? {
+            info!("Columns names and order are correct");
+        }
+        else {
+            error!("Expected columns != Real columns");
+            return Ok(false);
+        }
+
+        // Second validation: If column names match, check if also the values match the validations
+        let mut validation_summaries_map = build_validation_summaries_map(&self.validations);
+        let mut is_valid_file = true;
+        for result in rdr.records() {
+            let record = result.unwrap();
+            for next_column in zip(record.iter(), self.validations.iter()) {
+                let value = next_column.0;
+                let _column_name = &next_column.1.column_name;
+                for validation in &next_column.1.validations {
+                    let valid = apply_validation(value, validation, &self.regex_map)?;
+                    if !valid {
+                        let validation_summary_list = validation_summaries_map.get_mut(_column_name).unwrap();
+                        let validation_summary = validation_summary_list
+                                .iter_mut()
+                                .find(|val_sum|
+                                    std::mem::discriminant(&val_sum.validation) == std::mem::discriminant(validation)).unwrap();
+                        validation_summary.wrong_rows += 1;
+                        if validation_summary.wrong_values_sample.len() < MAX_SAMPLE_SIZE as usize {
+                            validation_summary.wrong_values_sample.push(value.to_string());
+                        }
+                    }
+                    is_valid_file = is_valid_file && valid;
+                }
+            }
+        }
+
+        // Fill the ColumnValidationSummary for each column
+        let mut column_validation_summaries = Vec::new();
+        for column_validation in &self.validations {
+            let validation_summary_for_column =
+                validation_summaries_map.remove(&column_validation.column_name).unwrap();
+            let column_validation_summary = ColumnValidationsSummary {
+                column_name: column_validation.column_name.clone(),
+                validation_summaries: validation_summary_for_column
+            };
+            column_validation_summaries.push(column_validation_summary);
+        }
+
+        // TODO: Decide how to return the results of the validations
+        let _validation_result_json = serde_json::to_string(&column_validation_summaries).unwrap();
+
+        debug!("VALIDATIONS SUMMARY");
+        debug!("==================================================================================");
+        for column_validation_summary in column_validation_summaries {
+            debug!("Column: '{}'", column_validation_summary.column_name);
+            for validation_summary in column_validation_summary.validation_summaries {
+                let wrong_values_sample = if validation_summary.wrong_values_sample.len() > 0 {
+                        format!(" | Wrong Values Sample: {:?}", validation_summary.wrong_values_sample)
+                } else {
+                    String::from("" )
+                };
+                debug!("\tValidation {:?} => Wrong Rows: {}{}", validation_summary.validation,
+                    validation_summary.wrong_rows, wrong_values_sample);
+            }
+        }
+
+        if is_valid_file {
+            info!("OK: File matches the validations");
+        }
+        else {
+            info!("NO OK: File DOESN'T match validations");
+        }
+        Ok(is_valid_file)
+    }
+}
+
+// Keep the existing functions for backward compatibility
+#[pyfunction]
+fn validate_with_file(path: &str, definition_path: &str) -> PyResult<bool> {
+    info!("Validating file {} against definition file {}", path, definition_path);
+    let validator = CSVValidator::from_file(definition_path)?;
+    validator.validate(path)
+}
+
+#[pyfunction]
+fn validate(path: &str, definition_string: String) -> PyResult<bool> {
+    debug!("Validating file {} against definition:\n {}", path, definition_string);
+    let validator = CSVValidator::from_string(&definition_string)?;
+    validator.validate(path)
+}
+
 /// A Python module implemented in Rust.
 #[pymodule]
 fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
+    m.add_class::<CSVValidator>()?;
     m.add_function(wrap_pyfunction!(validate, m)?)?;
     m.add_function(wrap_pyfunction!(validate_with_file, m)?)?;
     Ok(())
@@ -314,7 +399,7 @@ fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use simple_logger::SimpleLogger;
-    use crate::{validate, validate_with_file};
+    use crate::{validate, validate_with_file, CSVValidator};
 
     #[test]
     fn init_logger() {
@@ -370,5 +455,86 @@ mod tests {
         ");
 
         assert!(validate("test/test_file.csv", definition).unwrap());
+    }
+
+    #[test]
+    fn test_csv_validator_from_file() {
+        let validator = CSVValidator::from_file("test/test_validations.yml").unwrap();
+        assert!(validator.validate("test/test_file.csv").unwrap());
+    }
+
+    #[test]
+    fn test_csv_validator_from_string() {
+        let definition = String::from("
+            columns:
+              - name: First Column
+                regex: ^.+$
+              - name: Second Column
+                regex: ^.+$
+              - name: Third Column
+                regex: ^-?[0-9]+$
+                min: -23
+                max: 2000
+        ");
+        let validator = CSVValidator::from_string(&definition).unwrap();
+        assert!(validator.validate("test/test_file.csv").unwrap());
+    }
+
+    #[test]
+    fn test_csv_validator_reuse() {
+        // Test that we can reuse the same validator for multiple files
+        let validator = CSVValidator::from_file("test/test_validations.yml").unwrap();
+        assert!(validator.validate("test/test_file.csv").unwrap());
+        assert!(validator.validate("test/test_file.csv.gz").unwrap());
+    }
+
+    #[test]
+    fn test_csv_validator_all_validation_types() {
+        let definition = String::from("
+            columns:
+              - name: Name
+                regex: ^[A-Za-z\\s]{2,50}$
+              - name: Age
+                format: positive_integer
+                min: 0
+                max: 120
+              - name: Status
+                values: [active, inactive, pending]
+        ");
+        let validator = CSVValidator::from_string(&definition).unwrap();
+        // This should fail as test_file.csv doesn't match these validations
+        assert!(!validator.validate("test/test_file.csv").unwrap());
+    }
+
+    #[test]
+    fn test_csv_validator_invalid_format() {
+        let definition = String::from("
+            columns:
+              - name: First Column
+                format: unknown_format  # This format doesn't exist
+        ");
+        assert!(CSVValidator::from_string(&definition).is_err());
+    }
+
+    #[test]
+    fn test_csv_validator_invalid_file() {
+        let validator = CSVValidator::from_file("test/test_validations.yml").unwrap();
+        assert!(validator.validate("nonexistent_file.csv").is_err());
+    }
+
+    #[test]
+    fn test_csv_validator_invalid_yaml() {
+        let definition = String::from("
+            invalid:
+              yaml:
+                format
+        ");
+        assert!(CSVValidator::from_string(&definition).is_err());
+    }
+
+    #[test]
+    fn test_csv_validator_empty_definition() {
+        let definition = String::from("");
+        assert!(CSVValidator::from_string(&definition).is_err());
     }
 }

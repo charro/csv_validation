@@ -2,7 +2,7 @@
 
 Blazing fast format validations for your CSV files
 
-This is a Python lib with a Rust core that will allow you to validate huge CSV files (GBs) in seconds or in few minutes.
+This is a Python lib with a Rust core that will allow you to validate huge CSV files (GBs) in seconds (or in few minutes for really huge files) using a minimal amount of memory.
 
 ## Features
 
@@ -29,19 +29,32 @@ pip install csv_validation
 
 ### Python
 
+#### You can provide a file with the validation rules
 ```python
-from csv_validation import validate_with_file
+from csv_validation import CSVValidator
 
-# Validate a CSV file using a validation definition file
-is_valid = validate_with_file("data.csv", "validation_rules.yaml")
+validator = CSVValidator.from_file("validation_rules.yaml")
+is_valid = validator.validate("data.csv")
+```
 
-# You can also validate gzipped CSV files
-is_valid = validate_with_file("data.csv.gz", "validation_rules.yaml")
+#### You can also create a validator from a string
+```python
+validation_rules = """
+columns:
+  - name: Name
+    regex: ^[A-Za-z\s]{2,50}$
+  - name: Age
+    format: positive_integer
+    max: 120
+"""
+
+validator = CSVValidator.from_string(validation_rules)
+is_valid = validator.validate("data.csv")
 ```
 
 ### Validation Definition Format
 
-Create a YAML file with your validation rules. Example:
+Create a small, easy to read YAML file with your validation rules. Example:
 
 ```yaml
 columns:
@@ -51,7 +64,6 @@ columns:
     regex: ^[A-Za-z\s'-]{2,50}$  # Letters, spaces, hyphens and apostrophes
   - name: Age
     format: positive_integer  # Using predefined format instead of custom regex
-    min: 0
     max: 120
   - name: Salary
     format: integer  # Allows negative integers too
@@ -76,7 +88,7 @@ columns:
    - Available formats:
      - `integer`: Validates any integer number (positive or negative)
      - `positive_integer`: Validates positive integer numbers
-     - Add more formats as needed
+     - More formats will be added in next versions
 
 3. **Minimum Value** (`min`)
    - Check if numeric fields are greater than or equal to a specified value
@@ -90,7 +102,7 @@ columns:
 ## Output
 
 The validation process provides detailed feedback including:
-- Overall validation status
+- Overall validation status (true/false)
 - Number of invalid rows per validation rule
 - Sample of invalid values for debugging
 - Detailed logging for troubleshooting
