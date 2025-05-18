@@ -88,7 +88,8 @@ columns:
    - Available formats:
      - `integer`: Validates any integer number (positive or negative)
      - `positive_integer`: Validates positive integer numbers
-     - More formats will be added in next versions
+     - `non_empty`: Validates that field contains at least one character
+   - More formats will be added in next versions
 
 3. **Minimum Value** (`min`)
    - Check if numeric fields are greater than or equal to a specified value
@@ -98,6 +99,22 @@ columns:
 
 5. **Value Set** (`values`)
    - Ensure fields only contain values from a predefined set
+
+## Global Validations
+
+### empty_not_ok
+
+Empty values (empty string '') are considered correct and accepted by default. 
+However, if your data must always have some content, 
+you can add a global `empty_not_ok` flag at the root level of your YAML definition to automatically 
+add the `format: non_empty` validation to all columns:
+
+```yaml
+empty_not_ok: true
+columns:
+  - name: Column1
+    # other validations...
+```
 
 ## Output
 
@@ -164,4 +181,4 @@ SOFTWARE.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. 
+Contributions are welcome! Please feel free to submit a Pull Request.
