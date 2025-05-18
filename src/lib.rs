@@ -40,6 +40,11 @@ impl PartialEq for Validation {
                 (v1 - v2).abs() < f64::EPSILON // Tolerates small differences in floats
             },
 
+            // Compare Values variants by comparing the vectors
+            (Validation::Values(values1), Validation::Values(values2)) => {
+                values1 == values2
+            },
+
             // Compare None variants (no associated data)
             (Validation::None, Validation::None) => true,
 
@@ -112,7 +117,7 @@ fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<St
 }
 
 fn get_regex_string_for_values(values: &Vec<String>) -> String {
-    values.join("|")
+    format!("^$|^(?:{})$", values.join("|"))
 }
 
 /// Infers the file compression type and returns the corresponding buffered reader
@@ -250,8 +255,8 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
 
 fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
-        "integer" => Ok(String::from("^-?\\d+$")),
-        "positive_integer" => Ok(String::from("^\\d+$")),
+        "integer" => Ok(String::from("^$|^-?\\d+$")),
+        "positive_integer" => Ok(String::from("^$|^\\d+$")),
         "non_empty" => Ok(String::from("^.+$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
     }
@@ -270,8 +275,8 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
         if expected_column_names.len() != headers.len() {
             let expected_columns_set: HashSet<String> = expected_column_names.iter().cloned().collect();
             let headers_set: HashSet<String> = headers.iter().cloned().collect();
-            debug!("File headers not in expected columns: {:?}", headers_set.difference(&expected_columns_set));
-            debug!("Columns in expected columns not in file headers: {:?}", expected_columns_set.difference(&headers_set));
+            debug!("These column names in the CSV file were not expected: {:?}", headers_set.difference(&expected_columns_set));
+            debug!("These expected column names were missing in the CSV file: {:?}", expected_columns_set.difference(&headers_set));
         }
         else {
             for (expected_column, header) in zip(expected_column_names, headers) {
@@ -435,8 +440,8 @@ mod tests {
             columns:
               - name: First Column
               - name: Second Column
-              - name: Wrong Column
-              - name: Expected Column Not In File
+              - name: Different Column name in file
+              - name: Missing Column Not In File
         ");
         let validator = CSVValidator::from_string(&definition).unwrap();
         assert!(!validator.validate("test/test_file.csv").unwrap());
@@ -489,6 +494,35 @@ mod tests {
         let validator = CSVValidator::from_string(&definition).unwrap();
         // This should fail as test_file.csv doesn't match these validations
         assert!(!validator.validate("test/test_file.csv").unwrap());
+    }
+
+    #[test]
+    fn test_empty_ok_by_default() {
+        let definition_empty_ok = String::from("
+            columns:
+              - name: First Column
+                format: positive_integer
+              - name: Second Column
+                values: ['A', 'B', 'C']
+        ");
+        let validator = CSVValidator::from_string(&definition_empty_ok).unwrap();
+        // This is OK as we didn't mention anything about empty values
+        assert!(validator.validate("test/empty_values.csv").unwrap());
+    }
+
+    #[test]
+    fn test_empty_not_ok() {
+        let definition_empty_ok = String::from("
+            empty_not_ok: true
+            columns:
+              - name: First Column
+                format: positive_integer
+              - name: Second Column
+                values: ['A', 'B', 'C']
+        ");
+        let validator = CSVValidator::from_string(&definition_empty_ok).unwrap();
+        // Validation is not OK as the file contains empty values
+        assert!(!validator.validate("test/empty_values.csv").unwrap());
     }
 
     #[test]
