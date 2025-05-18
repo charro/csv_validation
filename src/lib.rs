@@ -371,49 +371,22 @@ impl CSVValidator {
     }
 }
 
-// Keep the existing functions for backward compatibility
-#[pyfunction]
-fn validate_with_file(path: &str, definition_path: &str) -> PyResult<bool> {
-    info!("Validating file {} against definition file {}", path, definition_path);
-    let validator = CSVValidator::from_file(definition_path)?;
-    validator.validate(path)
-}
-
-#[pyfunction]
-fn validate(path: &str, definition_string: String) -> PyResult<bool> {
-    debug!("Validating file {} against definition:\n {}", path, definition_string);
-    let validator = CSVValidator::from_string(&definition_string)?;
-    validator.validate(path)
-}
-
 /// A Python module implemented in Rust.
 #[pymodule]
 fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pyo3_log::init();
     m.add_class::<CSVValidator>()?;
-    m.add_function(wrap_pyfunction!(validate, m)?)?;
-    m.add_function(wrap_pyfunction!(validate_with_file, m)?)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use simple_logger::SimpleLogger;
-    use crate::{validate, validate_with_file, CSVValidator};
+    use crate::{CSVValidator};
 
     #[test]
     fn init_logger() {
         SimpleLogger::new().init().unwrap();
-    }
-
-    #[test]
-    fn test_validate_csv_with_file() {
-        assert!(validate_with_file("test/test_file.csv", "test/test_validations.yml").unwrap());
-    }
-
-    #[test]
-    fn test_validate_csv_gz_with_file() {
-        assert!(validate_with_file("test/test_file.csv.gz", "test/test_validations.yml").unwrap());
     }
 
     #[test]
@@ -425,36 +398,8 @@ mod tests {
               - name: Wrong Column
               - name: Expected Column Not In File
         ");
-        assert!(!validate("test/test_file.csv", definition).unwrap());
-    }
-
-    #[test]
-    fn test_format_validation() {
-        let definition = String::from("
-            columns:
-              - name: First Column
-              - name: Second Column
-              - name: Third Column
-                format: integer
-        ");
-        assert!(validate("test/test_file.csv", definition).unwrap());
-    }
-
-    #[test]
-    fn test_validate_csv() {
-        let definition = String::from("
-            columns:
-              - name: First Column
-                regex: ^.+$
-              - name: Second Column
-                values: [one_value, or_another]
-              - name: Third Column
-                regex: ^-?[0-9]+$
-                min: -23
-                max: 2000
-        ");
-
-        assert!(validate("test/test_file.csv", definition).unwrap());
+        let validator = CSVValidator::from_string(&definition).unwrap();
+        assert!(!validator.validate("test/test_file.csv").unwrap());
     }
 
     #[test]
