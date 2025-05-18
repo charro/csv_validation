@@ -1,3 +1,4 @@
+empty_not_ok: true
 columns:
   - name: First Column
     regex: ^.+$

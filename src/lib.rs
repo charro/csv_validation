@@ -26,6 +26,30 @@ enum Validation {
     None
 }
 
+impl PartialEq for Validation {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Compare RegularExpression enum values deeply
+            (
+                Validation::RegularExpression { expression: exp1, alias: alias1 },
+                Validation::RegularExpression { expression: exp2, alias: alias2 },
+            ) => exp1 == exp2 && alias1 == alias2,
+
+            // Compare Min and Max enums with `f64` values, using custom comparison
+            (Validation::Min(v1), Validation::Min(v2)) | (Validation::Max(v1), Validation::Max(v2)) => {
+                (v1 - v2).abs() < f64::EPSILON // Tolerates small differences in floats
+            },
+
+            // Compare None variants (no associated data)
+            (Validation::None, Validation::None) => true,
+
+            // If enums don't match, they are not equal
+            _ => false,
+        }
+    }
+}
+
+
 #[derive(Clone)]
 struct ColumnValidations {
     column_name: String,
@@ -207,6 +231,20 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
         column_validations.push(new_validations);
     }
 
+    // If the global flag empty_not_ok is present, we automatically add an extra validation in each column to check that
+    // there are not empty values on that column
+    let empty_not_ok =
+        config[0]["empty_not_ok"].as_bool().map_or(false, |value| value);
+    if empty_not_ok {
+        let non_empty_validation = RegularExpression {
+            expression: String::from("^.+$"),
+            alias: String::from("non_empty")
+        };
+        for column_validations in column_validations.iter_mut() {
+            column_validations.validations.push(non_empty_validation.clone());
+        }
+    }
+
     Ok(column_validations)
 }
 
@@ -214,6 +252,7 @@ fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
         "integer" => Ok(String::from("^-?\\d+$")),
         "positive_integer" => Ok(String::from("^\\d+$")),
+        "non_empty" => Ok(String::from("^.+$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
     }
 }
@@ -318,9 +357,10 @@ impl CSVValidator {
                     if !valid {
                         let validation_summary_list = validation_summaries_map.get_mut(_column_name).unwrap();
                         let validation_summary = validation_summary_list
-                                .iter_mut()
-                                .find(|val_sum|
-                                    std::mem::discriminant(&val_sum.validation) == std::mem::discriminant(validation)).unwrap();
+                            .iter_mut()
+                            .find(|val_sum| val_sum.validation == *validation)
+                            .unwrap();
+
                         validation_summary.wrong_rows += 1;
                         if validation_summary.wrong_values_sample.len() < MAX_SAMPLE_SIZE as usize {
                             validation_summary.wrong_values_sample.push(value.to_string());
