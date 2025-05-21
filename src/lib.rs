@@ -256,7 +256,10 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
 fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
         "integer" => Ok(String::from("^$|^-?\\d+$")),
-        "positive_integer" => Ok(String::from("^$|^\\d+$")),
+        "positive integer" => Ok(String::from("^$|^\\d+$")),
+        "decimal" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?$")),
+        "positive decimal" => Ok(String::from("^$|^\\d+(\\.\\d+)?$")),
+        "decimal scientific" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?$")),
         "non_empty" => Ok(String::from("^.+$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
     }
@@ -430,7 +433,7 @@ fn csv_validation(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use simple_logger::SimpleLogger;
-    use crate::{CSVValidator};
+    use crate::CSVValidator;
 
     #[test]
     fn init_logger() {
@@ -488,7 +491,7 @@ mod tests {
               - name: Name
                 regex: ^[A-Za-z\\s]{2,50}$
               - name: Age
-                format: positive_integer
+                format: positive integer
                 min: 0
                 max: 120
               - name: Status
@@ -504,7 +507,7 @@ mod tests {
         let definition_empty_ok = String::from("
             columns:
               - name: First Column
-                format: positive_integer
+                format: positive integer
               - name: Second Column
                 values: ['A', 'B', 'C']
         ");
@@ -519,7 +522,7 @@ mod tests {
             empty_not_ok: true
             columns:
               - name: First Column
-                format: positive_integer
+                format: positive integer
               - name: Second Column
                 values: ['A', 'B', 'C']
         ");
@@ -558,5 +561,118 @@ mod tests {
     fn test_csv_validator_empty_definition() {
         let definition = String::from("");
         assert!(CSVValidator::from_string(&definition).is_err());
+    }
+
+    #[test]
+    fn test_format_integer() {
+        let test_cases = vec![
+            ("42", true),
+            ("-42", true),
+            ("0", true),
+            ("", true),      // Empty values are allowed by default
+            ("3.14", false),
+            ("abc", false),
+            ("123abc", false),
+        ];
+
+        test_format_validation("integer", test_cases);
+    }
+
+    #[test]
+    fn test_format_positive_integer() {
+        let test_cases = vec![
+            ("42", true),
+            ("0", true),
+            ("", true),      // Empty values are allowed by default
+            ("-42", false),
+            ("3.14", false),
+            ("abc", false),
+            ("123abc", false),
+        ];
+
+        test_format_validation("positive integer", test_cases);
+    }
+
+    #[test]
+    fn test_format_decimal() {
+        let test_cases = vec![
+            ("42", true),
+            ("42.0", true),
+            ("42.42", true),
+            ("-42.42", true),
+            ("0.0", true),
+            ("", true),      // Empty values are allowed by default
+            ("abc", false),
+            ("12.34.56", false),
+            ("12e4", false),
+        ];
+
+        test_format_validation("decimal", test_cases);
+    }
+
+    #[test]
+    fn test_format_positive_decimal() {
+        let test_cases = vec![
+            ("42", true),
+            ("42.0", true),
+            ("42.42", true),
+            ("0.0", true),
+            ("", true),      // Empty values are allowed by default
+            ("-42.42", false),
+            ("abc", false),
+            ("12.34.56", false),
+            ("12e4", false),
+        ];
+
+        test_format_validation("positive decimal", test_cases);
+    }
+
+    #[test]
+    fn test_format_decimal_scientific() {
+        let test_cases = vec![
+            ("42", true),
+            ("42.0", true),
+            ("42.42", true),
+            ("-42.42", true),
+            ("1.234e5", true),
+            ("1.234e+5", true),
+            ("1.234e-5", true),
+            ("1.234E5", true),
+            ("", true),      // Empty values are allowed by default
+            ("abc", false),
+            ("12.34.56", false),
+            ("1.234e", false),
+            ("e5", false),
+            ("1.234e+", false),
+        ];
+
+        test_format_validation("decimal scientific", test_cases);
+    }
+    
+    // Helper function to test format validations
+    fn test_format_validation(format: &str, test_cases: Vec<(&str, bool)>) {
+        let definition = format!("
+            columns:
+              - name: Test
+                format: {}
+        ", format);
+
+        let validator = CSVValidator::from_string(&definition).unwrap();
+
+        for (value, expected) in test_cases {
+            let test_csv = format!("Test\n{}", value);
+            let temp_file = format!("test/temp_format_test_{}.csv", format.replace(" ", "_"));
+            std::fs::write(&temp_file, test_csv).unwrap();
+            
+            let result = validator.validate(&temp_file).unwrap();
+            assert_eq!(
+                result, 
+                expected, 
+                "Format '{}' validation failed for value '{}': expected {}, got {}", 
+                format, value, expected, result
+            );
+
+            std::fs::remove_file(&temp_file).unwrap();
+        }
     }
 }
