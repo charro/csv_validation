@@ -345,13 +345,14 @@ impl CSVValidator {
             info!("Columns names and order are correct");
         }
         else {
-            error!("Expected columns != Real columns");
+            error!("Expected columns != CSV file columns. Cannot continue with the validations");
             return Ok(false);
         }
 
         // Second validation: If column names match, check if also the values match the validations
         let mut validation_summaries_map = build_validation_summaries_map(&self.validations);
         let mut is_valid_file = true;
+        let mut validated_rows = 0;
         for result in rdr.records() {
             let record = result.unwrap();
             for next_column in zip(record.iter(), self.validations.iter()) {
@@ -374,6 +375,7 @@ impl CSVValidator {
                     is_valid_file = is_valid_file && valid;
                 }
             }
+            validated_rows = validated_rows + 1;
         }
 
         // Fill the ColumnValidationSummary for each column
@@ -393,6 +395,7 @@ impl CSVValidator {
 
         debug!("VALIDATIONS SUMMARY");
         debug!("==================================================================================");
+        debug!("Rows: {} | Columns: {}", validated_rows, column_validation_summaries.len());
         for column_validation_summary in column_validation_summaries {
             debug!("Column: '{}'", column_validation_summary.column_name);
             for validation_summary in column_validation_summary.validation_summaries {
