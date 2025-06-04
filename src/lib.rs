@@ -396,18 +396,18 @@ impl CSVValidator {
         // TODO: Decide how to return the results of the validations
         let _validation_result_json = serde_json::to_string(&column_validation_summaries).unwrap();
 
-        debug!("VALIDATIONS SUMMARY");
-        debug!("==================================================================================");
-        debug!("Rows: {} | Columns: {}", validated_rows, column_validation_summaries.len());
+        info!("VALIDATIONS SUMMARY");
+        info!("==================================================================================");
+        info!("Rows: {} | Columns: {}", validated_rows, column_validation_summaries.len());
         for column_validation_summary in column_validation_summaries {
-            debug!("Column: '{}'", column_validation_summary.column_name);
+            info!("Column: '{}'", column_validation_summary.column_name);
             for validation_summary in column_validation_summary.validation_summaries {
                 let wrong_values_sample = if validation_summary.wrong_values_sample.len() > 0 {
                         format!(" | Wrong Values Sample: {:?}", validation_summary.wrong_values_sample)
                 } else {
                     String::from("" )
                 };
-                debug!("\tValidation {:?} => Wrong Rows: {}{}", validation_summary.validation,
+                info!("\tValidation {:?} => Wrong Rows: {}{}", validation_summary.validation,
                     validation_summary.wrong_rows, wrong_values_sample);
             }
         }
