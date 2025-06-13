@@ -258,7 +258,8 @@ fn get_regex_for_format(format: &str) -> PyResult<String> {
         "integer" => Ok(String::from("^$|^-?\\d+$")),
         "positive integer" => Ok(String::from("^$|^\\d+$")),
         "decimal" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?$")),
-        "positive decimal" => Ok(String::from("^$|^\\d+(\\.\\d+)?$")),
+        "positive decimal point" | "positive decimal" => Ok(String::from("^$|^\\d+(\\.\\d+)?$")),
+        "positive decimal comma" => Ok(String::from("^$|^\\d+(,\\d+)?$")),
         "decimal scientific" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?$")),
         "non_empty" => Ok(String::from("^.+$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
@@ -276,15 +277,17 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
 
     if expected_column_names != headers {
         if expected_column_names.len() != headers.len() {
+            info!("The number of columns in the CSV file doesn't match the validations:");
             let expected_columns_set: HashSet<String> = expected_column_names.iter().cloned().collect();
             let headers_set: HashSet<String> = headers.iter().cloned().collect();
-            debug!("These column names in the CSV file were not expected: {:?}", headers_set.difference(&expected_columns_set));
-            debug!("These expected column names were missing in the CSV file: {:?}", expected_columns_set.difference(&headers_set));
+            info!("These column names in the CSV file were not expected: {:?}", headers_set.difference(&expected_columns_set));
+            info!("These expected column names were missing in the CSV file: {:?}", expected_columns_set.difference(&headers_set));
         }
         else {
+            info!("The CSV file has the same number of columns than the validations but some names are different:");
             for (expected_column, header) in zip(expected_column_names, headers) {
                 if expected_column != header {
-                    debug!("{:?} != {:?}", expected_column, header);
+                    info!("{:?} != {:?}", expected_column, header);
                 }
             }
         }
@@ -396,6 +399,7 @@ impl CSVValidator {
         // TODO: Decide how to return the results of the validations
         let _validation_result_json = serde_json::to_string(&column_validation_summaries).unwrap();
 
+        let mut failed_columns = HashMap::new();
         info!("VALIDATIONS SUMMARY");
         info!("==================================================================================");
         info!("Rows: {} | Columns: {}", validated_rows, column_validation_summaries.len());
@@ -409,6 +413,13 @@ impl CSVValidator {
                 };
                 info!("\tValidation {:?} => Wrong Rows: {}{}", validation_summary.validation,
                     validation_summary.wrong_rows, wrong_values_sample);
+                if validation_summary.wrong_rows > 0 {
+                    let column_name = &column_validation_summary.column_name;
+                    if !failed_columns.contains_key(column_name) {
+                        failed_columns.insert(column_name.clone(), vec!());
+                    }
+                    failed_columns.get_mut(column_name).unwrap().push(validation_summary);
+                }
             }
         }
 
@@ -416,7 +427,13 @@ impl CSVValidator {
             info!("OK: File matches the validations");
         }
         else {
-            info!("NO OK: File DOESN'T match validations");
+            info!("NO OK: File DOESN'T match validations. Failed Validations:");
+            for (column_name, failed_validations) in failed_columns.into_iter() {
+                info!("COLUMN '{}' :", column_name);
+                for validation_summary in failed_validations {
+                    info!("\tValidation {:?} => Wrong Rows: {}", validation_summary.validation, validation_summary.wrong_rows)
+                }
+            }
         }
         Ok(is_valid_file)
     }
