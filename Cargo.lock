@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "csv_validation"
-version = "0.0.8"
+version = "0.0.9"
 dependencies = [
  "csv",
  "flate2",

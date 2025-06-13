@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{BufReader, Read};
 use std::iter::zip;
 use std::path::Path;
-use csv::Reader;
+use csv::{Reader, ReaderBuilder};
 use flate2::bufread::GzDecoder;
 use log::{debug, error, info};
 use pyo3::exceptions::{PyRuntimeError};
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::Validation::{RegularExpression};
 
 const MAX_SAMPLE_SIZE:u16 = 10;
+const DEFAULT_COLUMN_SEPARATOR:u8 = b',';
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Validation {
@@ -121,16 +122,20 @@ fn get_regex_string_for_values(values: &Vec<String>) -> String {
 }
 
 /// Infers the file compression type and returns the corresponding buffered reader
-fn get_reader_from(path: &str) -> PyResult<Reader<Box<dyn Read>>> {
+fn get_reader_from(path: &str, separator: u8) -> PyResult<Reader<Box<dyn Read>>> {
     let buf_reader = BufReader::new(File::open(Path::new(path))?);
     if is_gzip_file(path)? {
         debug!("File is gzipped");
         let read_capacity = 10 * 1024_usize.pow(2);
         let reader = BufReader::with_capacity(read_capacity, GzDecoder::new(buf_reader));
-        Ok(Reader::from_reader(Box::new(reader)))
+        Ok(ReaderBuilder::new()
+            .delimiter(separator)
+            .from_reader(Box::new(reader)))
     }
     else {
-        Ok(Reader::from_reader(Box::new(buf_reader)))
+        Ok(ReaderBuilder::new()
+            .delimiter(separator)
+            .from_reader(Box::new(buf_reader)))
     }
 }
 
@@ -299,7 +304,8 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
 #[pyclass]
 struct CSVValidator {
     validations: Vec<ColumnValidations>,
-    regex_map: HashMap<String, Regex>
+    regex_map: HashMap<String, Regex>,
+    separator: u8
 }
 
 #[pymethods]
@@ -308,7 +314,8 @@ impl CSVValidator {
     fn new() -> Self {
         CSVValidator {
             validations: Vec::new(),
-            regex_map: HashMap::new()
+            regex_map: HashMap::new(),
+            separator: DEFAULT_COLUMN_SEPARATOR
         }
     }
 
@@ -339,12 +346,22 @@ impl CSVValidator {
             }
         }
 
-        Ok(CSVValidator { validations, regex_map })
+        Ok(CSVValidator { validations, regex_map, separator: DEFAULT_COLUMN_SEPARATOR })
+    }
+
+    fn set_separator(&mut self, separator: String)  -> PyResult<()> {
+        if separator.len() == 1 {
+            self.separator = separator.chars().next().unwrap() as u8;
+            Ok(())
+        }
+        else {
+            Err(PyRuntimeError::new_err(format!("Wrong separator {separator}. It can only have one character")))
+        }
     }
 
     fn validate(&self, file_path: &str) -> PyResult<bool> {
         // Build the CSV reader
-        let mut rdr = get_reader_from(file_path)?;
+        let mut rdr = get_reader_from(file_path, self.separator)?;
 
         // First validation: Ensure column names and order are exactly as expected
         if validate_column_names(&mut rdr, &self.validations)? {
