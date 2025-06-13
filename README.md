@@ -1,4 +1,4 @@
-# CSV Validation
+# CSV Validation Library
 
 Blazing fast format validations for your CSV files
 
@@ -49,6 +49,10 @@ columns:
 """
 
 validator = CSVValidator.from_string(validation_rules)
+# Optionally set a custom column separator
+validator.set_separator(";")  # Default is comma (,)
+
+# Validate a CSV file
 is_valid = validator.validate("data.csv")
 ```
 
@@ -116,13 +120,33 @@ columns:
     # other validations...
 ```
 
-## Output
+### Supported Formats
 
-The validation process provides detailed feedback including:
-- Overall validation status (true/false)
-- Number of invalid rows per validation rule
-- Sample of invalid values for debugging
-- Detailed logging for troubleshooting
+- `integer`: Any integer number (positive or negative)
+- `positive integer`: Any positive integer number
+- `decimal`: Any decimal number (positive or negative)
+- `positive decimal point`: Any positive decimal number using point as decimal separator
+- `positive decimal comma`: Any positive decimal number using comma as decimal separator
+- `decimal scientific`: Any decimal number in scientific notation
+- `non_empty`: Any non-empty value
+
+### Column Separators
+
+By default, the library uses comma (,) as the column separator. You can change this using the `set_separator` method:
+
+```python
+validator = CSVValidator.from_file("rules.yml")
+validator.set_separator(";")  # Use semicolon as separator
+validator.set_separator("\t")  # Use tab as separator
+```
+
+## Error Handling
+
+The library provides detailed validation reports through Python's logging system. When a validation fails, you'll get information about:
+- Which columns failed validation
+- What type of validation failed
+- Sample of invalid values
+- Number of rows that failed each validation
 
 ## Development
 
@@ -132,7 +156,7 @@ The validation process provides detailed feedback including:
 - Python 3.6+ (for Python bindings)
 - Cargo and standard Rust tooling
 
-### Building from Source
+### Building from Source (Rust version)
 
 ```bash
 # Clone the repository
