@@ -97,15 +97,25 @@ fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<St
             Ok(regex.is_match(value))
         },
         Validation::Min(min) => {
-            match value.parse::<f64>() {
-                Ok(value) => Ok(value >= *min),
-                Err(_) => Ok(false)
+            if value.is_empty() {
+                Ok(true)
+            }
+            else {
+                match value.parse::<f64>() {
+                    Ok(value) => Ok(value >= *min),
+                    Err(_) => Ok(false)
+                }   
             }
         },
         Validation::Max(max) => {
-            match value.parse::<f64>() {
-                Ok(value) => Ok(value <= *max),
-                Err(_) => Ok(false)
+            if value.is_empty() {
+                Ok(true)
+            }
+            else {
+                match value.parse::<f64>() {
+                    Ok(value) => Ok(value <= *max),
+                    Err(_) => Ok(false)
+                }
             }
         },
         Validation::Values(values) => {
@@ -595,6 +605,33 @@ mod tests {
     fn test_csv_validator_empty_definition() {
         let definition = String::from("");
         assert!(CSVValidator::from_string(&definition).is_err());
+    }
+
+    #[test]
+    fn test_csv_validator_min_max_validation() {
+        let definition = String::from("
+            columns:
+              - name: First Column
+              - name: Second Column
+              - name: Third Column
+                min: -23
+                max: 1978
+        ");
+        let validator = CSVValidator::from_string(&definition).unwrap();
+        assert!(validator.validate("test/test_file.csv").unwrap());
+    }
+
+    #[test]
+    fn test_csv_validator_min_max_validation_empty_values_are_ok_by_default() {
+        let definition = String::from("
+            columns:
+              - name: First Column
+                min: -23
+                max: 1978
+              - name: Second Column
+        ");
+        let validator = CSVValidator::from_string(&definition).unwrap();
+        assert!(validator.validate("test/empty_values.csv").unwrap());
     }
 
     #[test]
