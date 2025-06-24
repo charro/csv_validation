@@ -11,12 +11,13 @@ use log::{debug, error, info};
 use pyo3::exceptions::{PyRuntimeError};
 use pyo3::prelude::*;
 use regex::Regex;
-use yaml_rust2::YamlLoader;
+use yaml_rust2::{Yaml, YamlLoader};
 use serde::{Deserialize, Serialize};
 use crate::Validation::{RegularExpression};
 
 const MAX_SAMPLE_SIZE:u16 = 10;
 const DEFAULT_COLUMN_SEPARATOR:u8 = b',';
+const DEFAULT_DECIMAL_SEPARATOR:char = '.';
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Validation {
@@ -88,43 +89,6 @@ fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashM
     }
 
     validation_summaries_map
-}
-
-fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<String, Regex>) -> PyResult<bool> {
-    match validation {
-        RegularExpression { expression: exp, alias: _ } => {
-            let regex = regex_map.get(exp).unwrap();
-            Ok(regex.is_match(value))
-        },
-        Validation::Min(min) => {
-            if value.is_empty() {
-                Ok(true)
-            }
-            else {
-                match value.parse::<f64>() {
-                    Ok(value) => Ok(value >= *min),
-                    Err(_) => Ok(false)
-                }   
-            }
-        },
-        Validation::Max(max) => {
-            if value.is_empty() {
-                Ok(true)
-            }
-            else {
-                match value.parse::<f64>() {
-                    Ok(value) => Ok(value <= *max),
-                    Err(_) => Ok(false)
-                }
-            }
-        },
-        Validation::Values(values) => {
-            let regex_str = get_regex_string_for_values(values);
-            let regex = regex_map.get(&regex_str).unwrap();
-            Ok(regex.is_match(value))
-        }
-        Validation::None => Err(PyRuntimeError::new_err("'None' validation has no implementation"))
-    }
 }
 
 fn get_regex_string_for_values(values: &Vec<String>) -> String {
@@ -219,14 +183,14 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
                     })
                 }
                 "min" => {
-                    let num = value.as_i64()
-                        .ok_or_else(|| PyRuntimeError::new_err("Min value must be a number"))?;
-                    Ok(Validation::Min(num as f64))
+                    let num = yaml_value_as_f64(value)
+                        .ok_or_else(|| PyRuntimeError::new_err(format!("Min value {:?} is not a number", value)))?;
+                    Ok(Validation::Min(num))
                 }
                 "max" => {
-                    let num = value.as_i64()
-                        .ok_or_else(|| PyRuntimeError::new_err("Max value must be a number"))?;
-                    Ok(Validation::Max(num as f64))
+                    let num = yaml_value_as_f64(value)
+                        .ok_or_else(|| PyRuntimeError::new_err(format!("Max value {:?} is not a number", value)))?;
+                    Ok(Validation::Max(num))
                 }
                 "values" => {
                     let values = value.as_vec()
@@ -280,6 +244,14 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
     Ok(column_validations)
 }
 
+fn yaml_value_as_f64(val: &Yaml) -> Option<f64> {
+    match val {
+        Yaml::Real(s) => s.parse().ok(),
+        Yaml::Integer(i) => Some(*i as f64),
+        _ => None,
+    }
+}
+
 fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
         "integer" => Ok(String::from("^$|^-?\\d+$")),
@@ -327,9 +299,11 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
 struct CSVValidator {
     validations: Vec<ColumnValidations>,
     regex_map: HashMap<String, Regex>,
-    separator: u8
+    separator: u8,
+    decimal_separator: char
 }
 
+// Methods Exposed to Python
 #[pymethods]
 impl CSVValidator {
     #[new]
@@ -337,7 +311,8 @@ impl CSVValidator {
         CSVValidator {
             validations: Vec::new(),
             regex_map: HashMap::new(),
-            separator: DEFAULT_COLUMN_SEPARATOR
+            separator: DEFAULT_COLUMN_SEPARATOR,
+            decimal_separator: DEFAULT_DECIMAL_SEPARATOR
         }
     }
 
@@ -368,7 +343,7 @@ impl CSVValidator {
             }
         }
 
-        Ok(CSVValidator { validations, regex_map, separator: DEFAULT_COLUMN_SEPARATOR })
+        Ok(CSVValidator { validations, regex_map, separator: DEFAULT_COLUMN_SEPARATOR, decimal_separator: DEFAULT_DECIMAL_SEPARATOR })
     }
 
     fn set_separator(&mut self, separator: String)  -> PyResult<()> {
@@ -378,6 +353,16 @@ impl CSVValidator {
         }
         else {
             Err(PyRuntimeError::new_err(format!("Wrong separator {separator}. It can only have one character")))
+        }
+    }
+
+    fn set_decimal_separator(&mut self, decimal_separator: String)  -> PyResult<()> {
+        if decimal_separator.len() == 1 {
+            self.decimal_separator = decimal_separator.chars().next().unwrap();
+            Ok(())
+        }
+        else {
+            Err(PyRuntimeError::new_err(format!("Wrong decimal separator {decimal_separator}. It can only have one character")))
         }
     }
 
@@ -404,7 +389,7 @@ impl CSVValidator {
                 let value = next_column.0;
                 let _column_name = &next_column.1.column_name;
                 for validation in &next_column.1.validations {
-                    let valid = apply_validation(value, validation, &self.regex_map)?;
+                    let valid = self.apply_validation(value, validation, &self.regex_map)?;
                     if !valid {
                         let validation_summary_list = validation_summaries_map.get_mut(_column_name).unwrap();
                         let validation_summary = validation_summary_list
@@ -475,6 +460,48 @@ impl CSVValidator {
             }
         }
         Ok(is_valid_file)
+    }
+}
+
+// Internal methods that are NOT Exposed in Python
+impl CSVValidator {
+    fn apply_validation(&self, value: &str, validation: &Validation, regex_map: &HashMap<String, Regex>) -> PyResult<bool> {
+        match validation {
+            RegularExpression { expression: exp, alias: _ } => {
+                let regex = regex_map.get(exp).unwrap();
+                Ok(regex.is_match(value))
+            },
+            Validation::Min(min) => {
+                if value.is_empty() {
+                    Ok(true)
+                }
+                else {
+                    let normalized_value = value.replace(self.decimal_separator, ".");
+                    match normalized_value.parse::<f64>() {
+                        Ok(value) => Ok(value >= *min),
+                        Err(_) => Ok(false)
+                    }
+                }
+            },
+            Validation::Max(max) => {
+                if value.is_empty() {
+                    Ok(true)
+                }
+                else {
+                    let normalized_value = value.replace(self.decimal_separator, ".");
+                    match normalized_value.parse::<f64>() {
+                        Ok(value) => Ok(value <= *max),
+                        Err(_) => Ok(false)
+                    }
+                }
+            },
+            Validation::Values(values) => {
+                let regex_str = get_regex_string_for_values(values);
+                let regex = regex_map.get(&regex_str).unwrap();
+                Ok(regex.is_match(value))
+            }
+            Validation::None => Err(PyRuntimeError::new_err("'None' validation has no implementation"))
+        }
     }
 }
 
@@ -654,13 +681,33 @@ mod tests {
                 values: ['A+', '[B]', 'C$']
         ");
 
-        let file_to_validate_path = "test/test_file_with_special_characters.csv";
+        let path_of_file_to_validate = "test/test_file_with_special_characters.csv";
         let file_content = "ColumnA\nA+\n[B]\nC$";
-        std::fs::write(file_to_validate_path, file_content).unwrap();
+        std::fs::write(path_of_file_to_validate, file_content).unwrap();
 
         let validator = CSVValidator::from_string(&definition).unwrap();
-        assert!(validator.validate(file_to_validate_path).unwrap());
-        std::fs::remove_file(file_to_validate_path).unwrap();
+        assert!(validator.validate(path_of_file_to_validate).unwrap());
+        std::fs::remove_file(path_of_file_to_validate).unwrap();
+    }
+
+    #[test]
+    fn test_min_max_with_custom_decimal_separator() {
+        let definition = String::from("
+            columns:
+              - name: ColumnA
+                min: -5
+                max: 27.8
+        ");
+
+        let path_of_file_to_validate = "test/test_file_with_custom_decimals.csv";
+        let file_content = "ColumnA\n0\n4,3\n27,8";
+        std::fs::write(path_of_file_to_validate, file_content).unwrap();
+
+        let mut validator = CSVValidator::from_string(&definition).unwrap();
+        validator.set_separator(String::from(";")).unwrap();
+        validator.set_decimal_separator(String::from(",")).unwrap();
+        assert!(validator.validate(path_of_file_to_validate).unwrap());
+        std::fs::remove_file(path_of_file_to_validate).unwrap();
     }
 
     #[test]
