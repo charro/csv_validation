@@ -128,7 +128,19 @@ fn apply_validation(value: &str, validation: &Validation, regex_map: &HashMap<St
 }
 
 fn get_regex_string_for_values(values: &Vec<String>) -> String {
-    format!("^$|^(?:{})$", values.join("|"))
+    format!("^$|^(?:{})$", values.iter().map(|s| regex_escape(s)).collect::<Vec<_>>().join("|"))
+}
+
+fn regex_escape(text: &str) -> String {
+    let metacharacters = r"\.^$|()?*+[]{}";
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if metacharacters.contains(ch) {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
 }
 
 /// Infers the file compression type and returns the corresponding buffered reader
@@ -632,6 +644,23 @@ mod tests {
         ");
         let validator = CSVValidator::from_string(&definition).unwrap();
         assert!(validator.validate("test/empty_values.csv").unwrap());
+    }
+
+    #[test]
+    fn test_list_of_values_with_special_characters() {
+        let definition = String::from("
+            columns:
+              - name: ColumnA
+                values: ['A+', '[B]', 'C$']
+        ");
+
+        let file_to_validate_path = "test/test_file_with_special_characters.csv";
+        let file_content = "ColumnA\nA+\n[B]\nC$";
+        std::fs::write(file_to_validate_path, file_content).unwrap();
+
+        let validator = CSVValidator::from_string(&definition).unwrap();
+        assert!(validator.validate(file_to_validate_path).unwrap());
+        std::fs::remove_file(file_to_validate_path).unwrap();
     }
 
     #[test]
