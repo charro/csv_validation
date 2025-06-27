@@ -12,7 +12,7 @@ This is a Python lib with a Rust core that will allow you to validate huge CSV f
   - Minimum/Maximum value checks
   - Value set validation (allowed values)
   - Column name and order validation
-- 🐍 Python bindings included
+- 🦀 + 🐍 Rust lib with Python bindings included
 - 📝 Detailed validation summaries with sample invalid values
 - 🚀 High performance with optimizations like regex pre-compilation
 - 📊 Support for large CSV files
@@ -88,12 +88,17 @@ columns:
    - Validate fields against custom regex patterns
 
 2. **Format** (`format`)
-   - Predefined formats for common validations
+   - Predefined formats for common validations (This is the recommended way to validate numeric fields)
+   - In the background, the library uses regex patterns to validate formats.
    - Available formats:
      - `integer`: Validates any integer number (positive or negative)
-     - `positive_integer`: Validates positive integer numbers
+     - `positive integer`: Validates positive integer numbers
+     - `decimal`: Validates any decimal number (positive or negative) using point as decimal separator
+     - `positive decimal point/positive decimal`: Validates positive decimal numbers using point as decimal separator
+     - `positive decimal comma`: Validates positive decimal numbers using comma as decimal separator
+     - `decimal scientific`: Validates decimal numbers in scientific notation (e.g. 23.02e-12)
      - `non_empty`: Validates that field contains at least one character
-   - More formats will be added in next versions
+   - More formats will be added in upcoming versions
 
 3. **Minimum Value** (`min`)
    - Check if numeric fields are greater than or equal to a specified value
@@ -120,17 +125,7 @@ columns:
     # other validations...
 ```
 
-### Supported Formats
-
-- `integer`: Any integer number (positive or negative)
-- `positive integer`: Any positive integer number
-- `decimal`: Any decimal number (positive or negative)
-- `positive decimal point`: Any positive decimal number using point as decimal separator
-- `positive decimal comma`: Any positive decimal number using comma as decimal separator
-- `decimal scientific`: Any decimal number in scientific notation
-- `non_empty`: Any non-empty value
-
-### Column Separators
+### Column Separator
 
 By default, the library uses comma (,) as the column separator. You can change this using the `set_separator` method:
 
@@ -138,6 +133,15 @@ By default, the library uses comma (,) as the column separator. You can change t
 validator = CSVValidator.from_file("rules.yml")
 validator.set_separator(";")  # Use semicolon as separator
 validator.set_separator("\t")  # Use tab as separator
+```
+
+### Decimal Separator
+
+By default, the library uses point (.) as the decimal separator. You can change this using the `set_decimal_separator` method:
+
+```python
+validator = CSVValidator.from_file("rules.yml")
+validator.set_decimal_separator(",")  # Use comma
 ```
 
 ## Error Handling

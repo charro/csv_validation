@@ -290,6 +290,7 @@ fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<C
                 }
             }
         }
+        error!("Cannot continue with the rest of the validations as they're based on correct column names and order");
         return Ok(false)
     }
     Ok(true)
