@@ -317,12 +317,28 @@ impl CSVValidator {
     }
 
     #[staticmethod]
+    #[pyo3(text_signature = "(definition_path)")]
+    /// Create a new CSVValidator from a YAML file with the validation definition.
+    ///
+    /// Args:
+    ///     definition_path (str): The path to the YAML file with the validation definition.
+    ///
+    /// Returns:
+    ///     a CSVValidation instance
     fn from_file(definition_path: &str) -> PyResult<Self> {
         let definition_string = fs::read_to_string(definition_path)?;
         Self::from_string(&definition_string)
     }
 
     #[staticmethod]
+    #[pyo3(text_signature = "(definition_string)")]
+    /// Create a new CSVValidator from a YAML string with the validation definition.
+    ///
+    /// Args:
+    ///     definition_string (str): A string with the YAML validations definition.
+    ///
+    /// Returns:
+    ///     a CSVValidation instance
     fn from_string(definition_string: &str) -> PyResult<Self> {
         let validations = get_validations(definition_string)?;
         let mut regex_map = HashMap::new();
@@ -346,6 +362,13 @@ impl CSVValidator {
         Ok(CSVValidator { validations, regex_map, separator: DEFAULT_COLUMN_SEPARATOR, decimal_separator: DEFAULT_DECIMAL_SEPARATOR })
     }
 
+    #[pyo3(text_signature = "(self, separator)")]
+    /// Set the CSV separator (also known as delimiter): 
+    /// 
+    /// The separator is ',' by default. If your file has a different one, you can modify it here.
+    ///
+    /// Args:
+    ///     separator (str): A string with only one character that is the CSV file separator.
     fn set_separator(&mut self, separator: String)  -> PyResult<()> {
         if separator.len() == 1 {
             self.separator = separator.chars().next().unwrap() as u8;
@@ -356,6 +379,14 @@ impl CSVValidator {
         }
     }
 
+    #[pyo3(text_signature = "(self, decimal_separator)")]
+    /// Set the decimal number separator 
+    ///
+    /// The default decimals separator for float numbers is '.'. 
+    /// If your file uses a different one, you can modify it here.
+    ///
+    /// Args:
+    ///     decimal_separator (str): A string with only one character that is the decimal separator.
     fn set_decimal_separator(&mut self, decimal_separator: String)  -> PyResult<()> {
         if decimal_separator.len() == 1 {
             self.decimal_separator = decimal_separator.chars().next().unwrap();
@@ -366,6 +397,15 @@ impl CSVValidator {
         }
     }
 
+    #[pyo3(text_signature = "(self, file_path)")]
+    /// Validates the CSV file against the validations defined in this CSVValidator.
+    /// When finished, it will log a comprehensive summary with the details of the Validation.
+    ///
+    /// Args:
+    ///     file_path (str): The path with the CSV file to validate. 
+    ///
+    /// Returns:
+    ///     bool: True if the file fully complies with all the validations, False otherwise
     fn validate(&self, file_path: &str) -> PyResult<bool> {
         // Build the CSV reader
         let mut rdr = get_reader_from(file_path, self.separator)?;
