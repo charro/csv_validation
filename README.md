@@ -2,16 +2,17 @@
 
 Blazing fast format validations for your CSV files
 
-This is a Python lib with a Rust core that will allow you to validate huge CSV files (GBs) in seconds (or in few minutes for really huge files) using a minimal amount of memory.
+This is a Python lib with a Rust core that will allow you to validate huge CSV files (GBs) in seconds (or in a few minutes for really huge files) using a minimal amount of memory.
 
 ## Features
 
 - ✨ Validate both plain and gzipped CSV files
 - 🔍 Multiple validation types supported:
+  - Correct column name and order
   - Regular expressions
-  - Minimum/Maximum value checks
+  - Well-known formats (integer, decimal, etc.)
+  - Minimum/Maximum numerical value checks
   - Value set validation (allowed values)
-  - Column name and order validation
 - 🦀 + 🐍 Rust lib with Python bindings included
 - 📝 Detailed validation summaries with sample invalid values
 - 🚀 High performance with optimizations like regex pre-compilation
@@ -58,7 +59,7 @@ is_valid = validator.validate("data.csv")
 
 ### Validation Definition Format
 
-Create a small, easy to read YAML file with your validation rules. Example:
+Create a small, easy-to-read YAML file with your validation rules. Example:
 
 ```yaml
 columns:
@@ -108,6 +109,9 @@ columns:
 
 5. **Value Set** (`values`)
    - Ensure fields only contain values from a predefined set
+
+You can add as many validations as you want for the same column, but take into account that the
+column only will be considered correct if all the validations are OK.
 
 ## Global Validations
 
