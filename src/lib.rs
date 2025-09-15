@@ -231,6 +231,15 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
                         alias: format.to_string() 
                     })
                 }
+                "extra" => {
+                    let extra = value.as_str()
+                        .ok_or_else(|| PyRuntimeError::new_err("Extra must be a string"))?;
+                    let regex_for_extra = get_regex_for_extra(extra)?;
+                    Ok(Validation::RegularExpression {
+                        expression: regex_for_extra,
+                        alias: extra.to_string()
+                    })
+                }
                 _ => Err(PyRuntimeError::new_err(format!("Unknown validation: {key}")))
             }?;
 
@@ -252,10 +261,7 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
     let empty_not_ok =
         config[0]["empty_not_ok"].as_bool().map_or(false, |value| value);
     if empty_not_ok {
-        let non_empty_validation = RegularExpression {
-            expression: String::from("^.+$"),
-            alias: String::from("non_empty")
-        };
+        let non_empty_validation = validation_for_non_empty();
         for column_validations in column_validations.iter_mut() {
             column_validations.validations.push(non_empty_validation.clone());
         }
@@ -276,13 +282,31 @@ fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
         "integer" => Ok(String::from("^$|^-?\\d+$")),
         "positive integer" => Ok(String::from("^$|^\\d+$")),
-        "decimal" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?$")),
+        "decimal" | "decimal point" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?$")),
+        "decimal comma" => Ok(String::from("^$|^-?\\d+(,\\d+)?$")),
         "positive decimal point" | "positive decimal" => Ok(String::from("^$|^\\d+(\\.\\d+)?$")),
         "positive decimal comma" => Ok(String::from("^$|^\\d+(,\\d+)?$")),
         "decimal scientific" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?$")),
-        "non_empty" => Ok(String::from("^.+$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
     }
+}
+
+fn get_regex_for_extra(extra: &str) -> PyResult<String> {
+    match extra {
+        "non_empty" => Ok(regex_for_non_empty()),
+        _ => Err(PyRuntimeError::new_err(format!("Unknown extra: {extra}")))
+    }
+}
+
+fn validation_for_non_empty() -> Validation {
+    RegularExpression {
+        expression: regex_for_non_empty(),
+        alias: String::from("non_empty")
+    }
+}
+
+fn regex_for_non_empty() -> String {
+    String::from("^.+$")
 }
 
 fn validate_column_names(reader: &mut Reader<Box<dyn Read>>, validations: &Vec<ColumnValidations>) -> PyResult<bool> {
@@ -720,6 +744,21 @@ mod tests {
         ");
         let validator = CSVValidator::from_string(&definition_empty_ok).unwrap();
         // Validation is not OK as the file contains empty values
+        assert!(!validator.validate("test/empty_values.csv").unwrap());
+    }
+
+    #[test]
+    fn test_extra_non_empty_column() {
+        let definition_with_non_empty_column = String::from("
+            columns:
+              - name: First Column
+                format: positive integer
+                extra: non_empty
+              - name: Second Column
+                values: ['A', 'B', 'C']
+        ");
+        let validator = CSVValidator::from_string(&definition_with_non_empty_column).unwrap();
+        // Validation is not OK as the second column contains empty values
         assert!(!validator.validate("test/empty_values.csv").unwrap());
     }
 

@@ -94,11 +94,11 @@ columns:
    - Available formats:
      - `integer`: Validates any integer number (positive or negative)
      - `positive integer`: Validates positive integer numbers
-     - `decimal`: Validates any decimal number (positive or negative) using point as decimal separator
+     - `decimal/decimal point`: Validates any decimal number (positive or negative) using point as decimal separator
+     - `decimal comma`: Validates decimal numbers using comma as decimal separator
      - `positive decimal point/positive decimal`: Validates positive decimal numbers using point as decimal separator
      - `positive decimal comma`: Validates positive decimal numbers using comma as decimal separator
      - `decimal scientific`: Validates decimal numbers in scientific notation (e.g. 23.02e-12)
-     - `non_empty`: Validates that field contains at least one character
    - More formats will be added in upcoming versions
 
 3. **Minimum Value** (`min`)
@@ -110,7 +110,12 @@ columns:
 5. **Value Set** (`values`)
    - Ensure fields only contain values from a predefined set
 
-You can add as many validations as you want for the same column, but take into account that the
+6. **Extra** (`extra`)
+   - Extra validations that normally complement one of the other types
+   - Available extras:
+     - `non_empty`: Validates that field contains at least one character
+
+You can add as many validation types as you want for the same column, but take into account that the
 column only will be considered correct if all the validations are OK.
 
 ## Global Validations
@@ -120,7 +125,7 @@ column only will be considered correct if all the validations are OK.
 Empty values (empty string '') are considered correct and accepted by default. 
 However, if your data must always have some content, 
 you can add a global `empty_not_ok` flag at the root level of your YAML definition to automatically 
-add the `format: non_empty` validation to all columns:
+add the `extra: non_empty` validation to all columns:
 
 ```yaml
 empty_not_ok: true
@@ -155,6 +160,40 @@ The library provides detailed validation reports through Python's logging system
 - What type of validation failed
 - Sample of invalid values
 - Number of rows that failed each validation
+
+### Example of validation report
+
+```
+VALIDATIONS SUMMARY
+==================================================
+FILE: /test.csv
+Rows: 232230 | Columns: 5
+
+CORRECT COLUMNS: 3/5
+--------------------------------------------------
+  - County: [✔] OK
+      ✔ - RegularExpression { expression: "^.*$", alias: "regex" }
+  - City: [✔] OK
+      ✔ - RegularExpression { expression: "^.*$", alias: "regex" }
+  - Model Year: [✔] OK
+      ✔ - RegularExpression { expression: "^[0-9]+$", alias: "regex" }
+      ✔ - Min(1999.0)
+      ✔ - Max(2025.78)
+
+WRONG COLUMNS: 2/5
+--------------------------------------------------
+  - State: [✖] FAIL
+      ✖ - Values(["WA", "OR", "NY", "DC", "CA", "TX", "FL", "OK", "MO", "KS", "VA", "MA", "MO", "NC", "IL", "AL", "WY", "CO", "PA", "WI", "MD", "NV", "AZ"])
+          "Wrong Rows: 93 | Sample: 'GA','NJ','CT','NJ','CT','CT','CT','NE','CT','NH'"
+  - Postal Code: [✖] FAIL
+      ✔ - RegularExpression { expression: "^$|^-?\\d+$", alias: "integer" }
+      ✖ - RegularExpression { expression: "^.+$", alias: "non_empty" }
+          "Wrong Rows: 4 | Sample: '','','',''"
+
+VALIDATION RESULT
+--------------------------------------------------
+[✖] FAIL: File DOESN'T match all validations
+```
 
 ## Development
 

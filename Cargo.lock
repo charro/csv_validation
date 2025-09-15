@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "csv_validation"
-version = "0.0.12"
+version = "0.0.13"
 dependencies = [
  "csv",
  "flate2",
@@ -92,7 +92,6 @@ dependencies = [
  "pyo3-log",
  "regex",
  "serde",
- "serde_json",
  "simple_logger",
  "yaml-rust2",
 ]
@@ -387,18 +386,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "serde_json"
-version = "1.0.140"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20068b6e96dc6c9bd23e01df8827e6c7e1f2fddd43c21810382803c136b99373"
-dependencies = [
- "itoa",
- "memchr",
- "ryu",
- "serde",
 ]
 
 [[package]]
