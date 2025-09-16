@@ -98,8 +98,9 @@ columns:
      - `decimal comma`: Validates decimal numbers using comma as decimal separator
      - `positive decimal point/positive decimal`: Validates positive decimal numbers using point as decimal separator
      - `positive decimal comma`: Validates positive decimal numbers using comma as decimal separator
-     - `decimal scientific`: Validates decimal numbers in scientific notation (e.g. 23.02e-12)
-   - More formats will be added in upcoming versions
+     - `decimal scientific`: Validates decimal numbers in scientific notation (e.g. -23.02e-12)
+     - `positive decimal scientific`: Validates positive decimal numbers in scientific notation (e.g. 23.02e-12)
+   - More formats will be likely added in upcoming versions
 
 3. **Minimum Value** (`min`)
    - Check if numeric fields are greater than or equal to a specified value
