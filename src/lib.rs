@@ -67,7 +67,7 @@ struct ColumnValidations {
 struct ValidationSummary {
     validation: Validation,
     wrong_rows: usize,
-    wrong_values_sample: Vec<String>
+    samples_rownum_and_wrong_value: Vec<(usize, String)>
 }
 
 #[derive(Serialize, Deserialize)]
@@ -87,11 +87,11 @@ struct FileValidationSummary {
 
 impl ValidationSummary {
     fn get_wrong_values_details(&self) -> String {
-        let wrong_samples = &self.wrong_values_sample
+        let wrong_samples = &self.samples_rownum_and_wrong_value
             .iter()
-            .map(|s| format!("'{}'", s))
+            .map(|s| format!("[row {}: '{}']", s.0, s.1))
             .collect::<Vec<String>>()
-            .join(",");
+            .join(", ");
         format!("Wrong Rows: {} | Sample: {}", self.wrong_rows, wrong_samples)
     }
 }
@@ -102,7 +102,7 @@ fn build_validation_summaries_map(validations: &Vec<ColumnValidations>) -> HashM
         let mut validation_summaries = Vec::new();
         for column_validation in &validation.validations {
             let validation_summary =
-                ValidationSummary{validation: (*column_validation).clone(), wrong_rows: 0, wrong_values_sample: Vec::new()};
+                ValidationSummary{validation: (*column_validation).clone(), wrong_rows: 0, samples_rownum_and_wrong_value: Vec::new()};
             validation_summaries.push(validation_summary);
         }
         validation_summaries_map.insert(validation.column_name.clone(), validation_summaries);
@@ -155,7 +155,7 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
     // Read the YAML definition with the validations
     let config = YamlLoader::load_from_str(definition_string)
         .map_err(|e| PyRuntimeError::new_err(format!("Invalid YAML format: {}", e)))?;
-    
+
     if config.is_empty() {
         return Err(PyRuntimeError::new_err("Empty YAML definition"));
     }
@@ -178,7 +178,7 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
     for column in columns_vec {
         let column_def = column.as_hash()
             .ok_or_else(|| PyRuntimeError::new_err("Invalid YAML: each column must be a mapping"))?;
-        
+
         let mut column_name = "";
         let mut validations = vec![];
 
@@ -186,7 +186,7 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
             let key = validation_definition.0.as_str()
                 .ok_or_else(|| PyRuntimeError::new_err("Invalid YAML: validation key must be a string"))?;
             let value = validation_definition.1;
-            
+
             let validation = match key {
                 "name" => {
                     column_name = value.as_str()
@@ -197,9 +197,9 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
                 "regex" => {
                     let expr = value.as_str()
                         .ok_or_else(|| PyRuntimeError::new_err("Regex must be a string"))?;
-                    Ok(Validation::RegularExpression { 
-                        expression: String::from(expr), 
-                        alias: String::from("regex") 
+                    Ok(Validation::RegularExpression {
+                        expression: String::from(expr),
+                        alias: String::from("regex")
                     })
                 }
                 "min" => {
@@ -226,9 +226,9 @@ fn get_validations(definition_string: &str) -> PyResult<Vec<ColumnValidations>> 
                     let format = value.as_str()
                         .ok_or_else(|| PyRuntimeError::new_err("Format must be a string"))?;
                     let regex_for_format = get_regex_for_format(format)?;
-                    Ok(Validation::RegularExpression { 
-                        expression: regex_for_format, 
-                        alias: format.to_string() 
+                    Ok(Validation::RegularExpression {
+                        expression: regex_for_format,
+                        alias: format.to_string()
                     })
                 }
                 "extra" => {
@@ -389,7 +389,7 @@ impl CSVValidator {
     fn from_string(definition_string: &str) -> PyResult<Self> {
         let validations = get_validations(definition_string)?;
         let mut regex_map = HashMap::new();
-        
+
         // Pre-Compile and save all Regex expressions
         for column_validation in &validations {
             for validation in &column_validation.validations {
@@ -487,8 +487,10 @@ impl CSVValidator {
                             .unwrap();
 
                         validation_summary.wrong_rows += 1;
-                        if validation_summary.wrong_values_sample.len() < MAX_SAMPLE_SIZE as usize {
-                            validation_summary.wrong_values_sample.push(value.to_string());
+                        if validation_summary.samples_rownum_and_wrong_value.len() < MAX_SAMPLE_SIZE as usize {
+                            let wrong_value = value.to_string();
+                            let wrong_rownum = validated_rows + 1;
+                            validation_summary.samples_rownum_and_wrong_value.push((wrong_rownum, wrong_value));
                         }
                     }
                     is_valid_file = is_valid_file && valid;
@@ -557,7 +559,7 @@ impl CSVValidator {
             info!("[✔] OK - File matches the validations");
         }
         else {
-            info!("[✖] FAIL: File DOESN'T match all validations");
+            info!("[✖] FAIL: File {} DOESN'T match all validations", file_path);
         }
         info!("");
         Ok(is_valid_file)
@@ -945,7 +947,7 @@ mod tests {
 
         test_format_validation("decimal scientific", test_cases);
     }
-    
+
     // Helper function to test format validations
     fn test_format_validation(format: &str, test_cases: Vec<(&str, bool)>) {
         let definition = format!("
@@ -960,12 +962,12 @@ mod tests {
             let test_csv = format!("Test\n{}", value);
             let temp_file = format!("test/temp_format_test_{}.csv", format.replace(" ", "_"));
             std::fs::write(&temp_file, test_csv).unwrap();
-            
+
             let result = validator.validate(&temp_file).unwrap();
             assert_eq!(
-                result, 
-                expected, 
-                "Format '{}' validation failed for value '{}': expected {}, got {}", 
+                result,
+                expected,
+                "Format '{}' validation failed for value '{}': expected {}, got {}",
                 format, value, expected, result
             );
 
