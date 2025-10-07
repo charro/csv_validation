@@ -282,7 +282,9 @@ fn get_regex_for_format(format: &str) -> PyResult<String> {
     match format {
         "integer" => Ok(String::from("^$|^-?\\d+$")),
         "positive integer" => Ok(String::from("^$|^\\d+$")),
+        "negative integer" => Ok(String::from("^$|^-\\d+$")),
         "decimal" | "decimal point" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?$")),
+        "negative decimal point" => Ok(String::from("^$|^-\\d+(\\.\\d+)?$")),
         "decimal comma" => Ok(String::from("^$|^-?\\d+(,\\d+)?$")),
         "positive decimal point" | "positive decimal" => Ok(String::from("^$|^\\d+(\\.\\d+)?$")),
         "positive decimal comma" => Ok(String::from("^$|^\\d+(,\\d+)?$")),
