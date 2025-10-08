@@ -94,11 +94,15 @@ columns:
    - Available formats:
      - `integer`: Validates any integer number (positive or negative)
      - `positive integer`: Validates positive integer numbers
-     - `decimal/decimal point`: Validates any decimal number (positive or negative) using point as decimal separator
+     - `negative integer`: Validates negative integer numbers
+     - `decimal`/`decimal point`: Validates any decimal number (positive or negative) using point as decimal separator
+     - `negative decimal point`: Validates negative decimal numbers using point as decimal separator
      - `decimal comma`: Validates decimal numbers using comma as decimal separator
-     - `positive decimal point/positive decimal`: Validates positive decimal numbers using point as decimal separator
+     - `positive decimal`/`positive decimal point`: Validates positive decimal numbers using point as decimal separator
      - `positive decimal comma`: Validates positive decimal numbers using comma as decimal separator
      - `decimal scientific`: Validates decimal numbers in scientific notation (e.g. 23.02e-12)
+     - `decimal scientific comma`: Validates decimal numbers in scientific notation using comma as decimal separator
+     - `positive decimal scientific`: Validates positive decimal numbers in scientific notation
    - More formats will be added in upcoming versions
 
 3. **Minimum Value** (`min`)
