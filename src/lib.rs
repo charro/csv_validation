@@ -289,6 +289,8 @@ fn get_regex_for_format(format: &str) -> PyResult<String> {
         "positive decimal point" | "positive decimal" => Ok(String::from("^$|^\\d+(\\.\\d+)?$")),
         "positive decimal comma" => Ok(String::from("^$|^\\d+(,\\d+)?$")),
         "decimal scientific" => Ok(String::from("^$|^-?\\d+(\\.\\d+)?([eE][-+]?\\d+)?$")),
+        "decimal scientific comma" => Ok(String::from("^$|^-?\\d+(\\,\\d+)?([eE][-+]?\\d+)?$")),
+        "positive decimal scientific" => Ok(String::from("^$|^\\d+(\\.\\d+)?([eE][-+]?\\d+)?$")),
         _ => Err(PyRuntimeError::new_err(format!("Unknown format: {format}")))
     }
 }
