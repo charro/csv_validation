@@ -23,6 +23,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
         platform:
           - runner: ubuntu-22.04
             target: x86_64
@@ -58,6 +59,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
         platform:
           - runner: ubuntu-22.04
             target: x86_64
@@ -89,6 +91,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
         platform:
           - runner: windows-latest
             target: x64
@@ -116,6 +119,7 @@ jobs:
     runs-on: ${{ matrix.platform.runner }}
     strategy:
       matrix:
+        python-version: ['3.8', '3.9', '3.10', '3.11', '3.12', '3.13']
         platform:
           - runner: macos-13
             target: x86_64
