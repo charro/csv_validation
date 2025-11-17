@@ -349,7 +349,9 @@ struct CSVValidator {
     validations: Vec<ColumnValidations>,
     regex_map: HashMap<String, Regex>,
     separator: u8,
-    decimal_separator: char
+    decimal_separator: char,
+    // Optional list of column names that compose a unique key constraint
+    unique_key_columns: Option<Vec<String>>
 }
 
 // Methods Exposed to Python
@@ -361,7 +363,8 @@ impl CSVValidator {
             validations: Vec::new(),
             regex_map: HashMap::new(),
             separator: DEFAULT_COLUMN_SEPARATOR,
-            decimal_separator: DEFAULT_DECIMAL_SEPARATOR
+            decimal_separator: DEFAULT_DECIMAL_SEPARATOR,
+            unique_key_columns: None
         }
     }
 
@@ -408,7 +411,28 @@ impl CSVValidator {
             }
         }
 
-        Ok(CSVValidator { validations, regex_map, separator: DEFAULT_COLUMN_SEPARATOR, decimal_separator: DEFAULT_DECIMAL_SEPARATOR })
+        // Parse optional root-level unique configuration (str or [str])
+        let config = YamlLoader::load_from_str(definition_string)
+            .map_err(|e| PyRuntimeError::new_err(format!("Invalid YAML format: {}", e)))?;
+        let unique_key_columns: Option<Vec<String>> = if !config.is_empty() {
+            let unique_yaml = &config[0]["unique"];
+            if unique_yaml.is_badvalue() {
+                None
+            } else if let Some(s) = unique_yaml.as_str() {
+                Some(vec![s.to_string()])
+            } else if let Some(vec) = unique_yaml.as_vec() {
+                let cols = vec.iter().map(|y| {
+                    y.as_str()
+                        .ok_or_else(|| PyRuntimeError::new_err("Invalid YAML: 'unique' array must contain only strings"))
+                        .map(|s| s.to_string())
+                }).collect::<PyResult<Vec<String>>>()?;
+                if cols.is_empty() { None } else { Some(cols) }
+            } else {
+                return Err(PyRuntimeError::new_err("Invalid YAML: 'unique' must be a string or an array of strings"));
+            }
+        } else { None };
+
+        Ok(CSVValidator { validations, regex_map, separator: DEFAULT_COLUMN_SEPARATOR, decimal_separator: DEFAULT_DECIMAL_SEPARATOR, unique_key_columns })
     }
 
     #[pyo3(text_signature = "(self, separator)")]
@@ -473,9 +497,51 @@ impl CSVValidator {
         let mut is_valid_file = true;
         let mut validated_rows = 0;
 
+        // Prepare unique key tracking if requested
+        let mut unique_key_indices: Option<Vec<usize>> = None;
+        let mut unique_key_counts: HashMap<String, usize> = HashMap::new();
+        let mut duplicated_keys_pretty_counts: HashMap<String, usize> = HashMap::new();
+        if let Some(unique_cols) = &self.unique_key_columns {
+            // Build header -> index map
+            let headers: Vec<String> = rdr.headers().unwrap().iter().map(|s| String::from(s)).collect();
+            let mut idxs = Vec::with_capacity(unique_cols.len());
+            for col in unique_cols {
+                match headers.iter().position(|h| h == col) {
+                    Some(i) => idxs.push(i),
+                    None => return Err(PyRuntimeError::new_err(format!("Unique key column '{}' not found among CSV headers", col)))
+                }
+            }
+            unique_key_indices = Some(idxs);
+        }
+
         // Iterate over the CSV file and validate each row
         for result in rdr.records() {
             let record = result.unwrap();
+
+            // Unique key check (single-pass)
+            if let Some(indices) = &unique_key_indices {
+                // Build raw and pretty keys
+                let mut raw_parts: Vec<String> = Vec::with_capacity(indices.len());
+                let mut pretty_parts: Vec<String> = Vec::with_capacity(indices.len());
+                if let Some(unique_cols) = &self.unique_key_columns {
+                    for (i, idx) in indices.iter().enumerate() {
+                        let val = record.get(*idx).unwrap_or("");
+                        raw_parts.push(val.to_string());
+                        let col_name = &unique_cols[i];
+                        pretty_parts.push(format!("{}='{}'", col_name, val));
+                    }
+                }
+                let raw_key = raw_parts.join("\u{1F}"); // Use non-printable unit separator
+                let pretty_key = format!("({})", pretty_parts.join(", "));
+                let new_count = unique_key_counts.get(&raw_key).cloned().unwrap_or(0) + 1;
+                unique_key_counts.insert(raw_key, new_count);
+                if new_count >= 2 {
+                    let dup_count = duplicated_keys_pretty_counts.get(&pretty_key).cloned().unwrap_or(1) + 1;
+                    // Store occurrences as the actual total occurrences
+                    duplicated_keys_pretty_counts.insert(pretty_key, dup_count);
+                    is_valid_file = false;
+                }
+            }
             for next_column in zip(record.iter(), self.validations.iter()) {
                 let value = next_column.0;
                 let _column_name = &next_column.1.column_name;
@@ -525,6 +591,26 @@ impl CSVValidator {
         info!("FILE: {}", file_path);
         info!("Rows: {} | Columns: {}", validation_process_summary.total_rows, validation_process_summary.total_columns);
 
+        let mut unique_validation_ok = true;
+        // If there are duplicated keys, report them first
+        if let Some(_) = &self.unique_key_columns {
+            info!("UNIQUE KEY: column(s): {:?}", &self.unique_key_columns);
+            if !duplicated_keys_pretty_counts.is_empty() {
+                info!("");
+                info!("DUPLICATED KEYS");
+                info!("--------------------------------------------------");
+                for (key, count) in duplicated_keys_pretty_counts.iter() {
+                    info!("  - {} -> occurrences: {}", key, count);
+                }
+                unique_validation_ok = false;
+            } else {
+                info!("");
+                info!("UNIQUE KEYS CHECK");
+                info!("--------------------------------------------------");
+                info!("  - No duplicates found");
+            }
+        }
+
         let correct_columns = validation_process_summary.correct_columns.len();
         let wrong_columns = validation_process_summary.wrong_columns.len();
 
@@ -553,6 +639,9 @@ impl CSVValidator {
                 }
             }
         }
+
+        // Adding other validation results before returning the final result
+        is_valid_file = is_valid_file && unique_validation_ok;
 
         info!("");
         info!("VALIDATION RESULT");
@@ -766,6 +855,22 @@ mod tests {
         let validator = CSVValidator::from_string(&definition_with_non_empty_column).unwrap();
         // Validation is not OK as the second column contains empty values
         assert!(!validator.validate("test/empty_values.csv").unwrap());
+    }
+
+    #[test]
+    fn test_unique_key_validation() {
+        let definition_with_non_empty_column = String::from("
+            unique: First Column
+            columns:
+              - name: First Column
+              - name: Second Column
+        ");
+        let validator = CSVValidator::from_string(&definition_with_non_empty_column).unwrap();
+
+        // Validation is OK as there are no duplicated keys
+        assert!(validator.validate("test/empty_values.csv").unwrap());
+        // Validation is not OK as the first column contains the value 456 twice
+        assert!(!validator.validate("test/duplicated_unique_keys.csv").unwrap());
     }
 
     #[test]
