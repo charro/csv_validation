@@ -14,10 +14,26 @@ use regex::Regex;
 use yaml_rust2::{Yaml, YamlLoader};
 use serde::{Deserialize, Serialize};
 use crate::Validation::{RegularExpression};
+use redb::{Database, ReadableTable, TableDefinition};
 
 const MAX_SAMPLE_SIZE:u16 = 10;
 const DEFAULT_COLUMN_SEPARATOR:u8 = b',';
 const DEFAULT_DECIMAL_SEPARATOR:char = '.';
+
+const DUPLICATES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("duplicates");
+
+// A simple guard to ensure the temp file is deleted when it goes out of scope.
+struct CleanupGuard {
+    path: String,
+}
+
+impl Drop for CleanupGuard {
+    fn drop(&mut self) {
+        if Path::new(&self.path).exists() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Validation {
@@ -499,7 +515,6 @@ impl CSVValidator {
 
         // Prepare unique key tracking if requested
         let mut unique_key_indices: Option<Vec<usize>> = None;
-        let mut unique_key_counts: HashMap<String, usize> = HashMap::new();
         let mut duplicated_keys_pretty_counts: HashMap<String, usize> = HashMap::new();
         if let Some(unique_cols) = &self.unique_key_columns {
             // Build header -> index map
@@ -512,6 +527,19 @@ impl CSVValidator {
                 }
             }
             unique_key_indices = Some(idxs);
+        }
+
+        // If unique key validation is enabled, prepare a temporary redb database
+        let mut _cleanup_guard: Option<CleanupGuard> = None;
+        let mut redb_db: Option<Database> = None;
+        let mut redb_txn: Option<redb::WriteTransaction> = None;
+        if unique_key_indices.is_some() {
+            let db_path = "_temp_redb.db";
+            _cleanup_guard = Some(CleanupGuard { path: db_path.to_string() });
+            let db = Database::create(db_path).map_err(|e| PyRuntimeError::new_err(format!("Failed to open redb: {}", e)))?;
+            let write_txn = db.begin_write().map_err(|e| PyRuntimeError::new_err(format!("Failed to begin transaction: {}", e)))?;
+            redb_txn = Some(write_txn);
+            redb_db = Some(db);
         }
 
         // Iterate over the CSV file and validate each row
@@ -533,13 +561,25 @@ impl CSVValidator {
                 }
                 let raw_key = raw_parts.join("\u{1F}"); // Use non-printable unit separator
                 let pretty_key = format!("({})", pretty_parts.join(", "));
-                let new_count = unique_key_counts.get(&raw_key).cloned().unwrap_or(0) + 1;
-                unique_key_counts.insert(raw_key, new_count);
-                if new_count >= 2 {
-                    let dup_count = duplicated_keys_pretty_counts.get(&pretty_key).cloned().unwrap_or(1) + 1;
-                    // Store occurrences as the actual total occurrences
-                    duplicated_keys_pretty_counts.insert(pretty_key, dup_count);
-                    is_valid_file = false;
+
+                if let Some(write_txn) = redb_txn.as_mut() {
+                    // Open table per iteration to avoid lifetime issues
+                    let mut table = write_txn
+                        .open_table(DUPLICATES_TABLE)
+                        .map_err(|e| PyRuntimeError::new_err(format!("Failed to open table: {}", e)))?;
+                    let exists = table
+                        .get(raw_key.as_str())
+                        .map_err(|e| PyRuntimeError::new_err(format!("DB Read Error: {}", e)))?
+                        .is_some();
+                    if exists {
+                        let dup_count = duplicated_keys_pretty_counts.get(&pretty_key).cloned().unwrap_or(1) + 1;
+                        duplicated_keys_pretty_counts.insert(pretty_key, dup_count);
+                        is_valid_file = false;
+                    } else {
+                        table
+                            .insert(raw_key.as_str(), &[] as &[u8])
+                            .map_err(|e| PyRuntimeError::new_err(format!("DB Insert Error: {}", e)))?;
+                    }
                 }
             }
             for next_column in zip(record.iter(), self.validations.iter()) {
@@ -566,6 +606,15 @@ impl CSVValidator {
             }
             validated_rows = validated_rows + 1;
         }
+
+        // Commit and clean up redb resources if used
+        if let Some(write_txn) = redb_txn.take() {
+            write_txn
+                .commit()
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to commit transaction: {}", e)))?;
+        }
+        // Explicitly drop the DB to release file handles before guard deletes the file
+        drop(redb_db);
 
         // Fill the ColumnValidationSummary for each column
         let mut column_validation_summaries = Vec::new();
@@ -597,9 +646,14 @@ impl CSVValidator {
             info!("UNIQUE KEY: column(s): {:?}", &self.unique_key_columns);
             if !duplicated_keys_pretty_counts.is_empty() {
                 info!("");
-                info!("DUPLICATED KEYS");
+                let total = duplicated_keys_pretty_counts.len();
+                info!("DUPLICATED KEYS (groups found: {})", total);
                 info!("--------------------------------------------------");
-                for (key, count) in duplicated_keys_pretty_counts.iter() {
+                let sample_limit: usize = 100;
+                if total > sample_limit {
+                    info!("Showing first {} of {} duplicate key groups:", sample_limit, total);
+                }
+                for (key, count) in duplicated_keys_pretty_counts.iter().take(100) {
                     info!("  - {} -> occurrences: {}", key, count);
                 }
                 unique_validation_ok = false;
