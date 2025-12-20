@@ -25,6 +25,12 @@ This is a Python lib with a Rust core that will allow you to validate huge CSV f
 ```bash
 pip install csv_validation
 ```
+```bash
+poetry add csv_validation
+```
+```bash
+uv add csv_validation
+```
 
 ## Usage
 
@@ -138,6 +144,68 @@ columns:
     # other validations...
 ```
 
+### Unique Key (Duplicate Rows) Validation
+
+You can enforce uniqueness across one or more columns by adding a root-level `unique` field in your YAML definition. This enables a memory-efficient duplicate detection that scales to very large files.
+
+- Accepts a single column name (string) or a list of column names (array of strings).
+- Works with both plain and gzipped CSV files.
+- Uses a high-performant disk-backed key-value store (redb) under the hood to keep memory usage low.
+
+Examples:
+
+```yaml
+# Single-column unique key
+unique: ID
+columns:
+  - name: ID
+    format: positive integer
+  - name: Name
+    regex: ^[A-Za-z\s]{2,50}$
+```
+
+```yaml
+# Composite unique key across multiple columns
+unique: [isin, date, score_provider]
+columns:
+  - name: isin
+    regex: ^[A-Z0-9]{12}$
+  - name: date
+    regex: ^\d{4}-\d{2}-\d{2}$
+  - name: score_provider
+    values: [sp1, sp2, sp3]
+  - name: score
+    format: decimal
+```
+
+What you will see in the summary:
+- Always shows the number of duplicate key groups found.
+- If there are more than 100 duplicate groups, only the first 100 are displayed as a sample (with their occurrence counts), and the total number is indicated.
+- If no duplicates are found, it reports: "Duplicates found: 0".
+
+Sample output (composite key):
+
+```
+UNIQUE KEY: column(s): ["isin", "date", "score_provider"]
+
+DUPLICATED KEYS (groups found: 134)
+--------------------------------------------------
+Showing first 100 of 134 duplicate key groups:
+  - (isin='US0004026250', date='2025-10-01', score_provider='sp1') -> occurrences: 3
+  - (isin='US5949181045', date='2025-10-01', score_provider='sp2') -> occurrences: 4
+  ... up to 100 lines ...
+```
+
+If none:
+
+```
+UNIQUE KEYS CHECK
+--------------------------------------------------
+  - No Duplicates found
+```
+
+Performance note: Duplicate detection stores only the unique keys on disk and keeps a tiny in-memory summary used for printing the report. This allows validating huge datasets with minimal RAM usage.
+
 ### Column Separator
 
 By default, the library uses comma (,) as the column separator. You can change this using the `set_separator` method:
@@ -228,6 +296,7 @@ cargo test
 - `pyo3`: Python bindings
 - `regex`: Regular expression support
 - `yaml-rust2`: YAML parsing
+- `redb`: Disk-backed key-value storage used for memory-efficient duplicate detection
 - Various utilities for logging and serialization
 
 ## License
