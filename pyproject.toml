@@ -11,5 +11,11 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dynamic = ["version"]
+description = "Blazing fast format validations for your CSV files"
+readme = "README.md"
+
+[project.urls]
+"Homepage" = "https://github.com/charro/csv_validation"
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
