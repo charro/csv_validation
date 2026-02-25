@@ -73,6 +73,29 @@ impl PartialEq for Validation {
 }
 
 
+impl std::fmt::Display for Validation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Validation::RegularExpression { alias, .. } if alias != "regex" => {
+                write!(f, "{}", alias)
+            }
+            Validation::RegularExpression { expression, .. } => {
+                write!(f, "regex: '{}'", expression)
+            }
+            Validation::Min(value) => write!(f, "min: {}", value),
+            Validation::Max(value) => write!(f, "max: {}", value),
+            Validation::Values(values) => {
+                let formatted_values = values.iter()
+                    .map(|v| format!("'{}'", v))
+                    .collect::<Vec<String>>()
+                    .join(", ");
+                write!(f, "values: {}", formatted_values)
+            }
+            Validation::None => write!(f, "none"),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ColumnValidations {
     column_name: String,
@@ -642,8 +665,8 @@ impl CSVValidator {
 
         let mut unique_validation_ok = true;
         // If there are duplicated keys, report them first
-        if let Some(_) = &self.unique_key_columns {
-            info!("UNIQUE KEY: column(s): {:?}", &self.unique_key_columns);
+        if let Some(unique_cols) = &self.unique_key_columns {
+            info!("UNIQUE KEY: column(s): {}", unique_cols.join(", "));
             if !duplicated_keys_pretty_counts.is_empty() {
                 info!("");
                 let total = duplicated_keys_pretty_counts.len();
@@ -674,7 +697,7 @@ impl CSVValidator {
         for column_validation_summary in &validation_process_summary.correct_columns {
             info!("  - {}: [✔] OK", column_validation_summary.column_name);
             for validation_summary in column_validation_summary.validation_summaries.iter() {
-                info!("      ✔ - {:?}", validation_summary.validation);
+                info!("      ✔ - {}", validation_summary.validation);
             }
         }
 
@@ -685,11 +708,11 @@ impl CSVValidator {
             info!("  - {}: [✖] FAIL", column_validation_summary.column_name);
             for validation_summary in column_validation_summary.validation_summaries.iter() {
                 if validation_summary.wrong_rows > 0 {
-                    info!("      ✖ - {:?}", validation_summary.validation);
+                    info!("      ✖ - {}", validation_summary.validation);
                     info!("          {:?}", validation_summary.get_wrong_values_details());
                 }
                 else {
-                    info!("      ✔ - {:?}", validation_summary.validation);
+                    info!("      ✔ - {}", validation_summary.validation);
                 }
             }
         }
