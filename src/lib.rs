@@ -22,19 +22,6 @@ const DEFAULT_DECIMAL_SEPARATOR:char = '.';
 
 const DUPLICATES_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("duplicates");
 
-// A simple guard to ensure the temp file is deleted when it goes out of scope.
-struct CleanupGuard {
-    path: String,
-}
-
-impl Drop for CleanupGuard {
-    fn drop(&mut self) {
-        if Path::new(&self.path).exists() {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Validation {
     RegularExpression { expression: String, alias: String },
@@ -553,15 +540,17 @@ impl CSVValidator {
         }
 
         // If unique key validation is enabled, prepare a temporary redb database
-        let mut _cleanup_guard: Option<CleanupGuard> = None;
+        let mut _temp_path: Option<tempfile::TempPath> = None;
         let mut redb_db: Option<Database> = None;
         let mut redb_txn: Option<redb::WriteTransaction> = None;
         if unique_key_indices.is_some() {
-            let db_path = "_temp_redb.db";
-            _cleanup_guard = Some(CleanupGuard { path: db_path.to_string() });
-            let db = Database::create(db_path).map_err(|e| PyRuntimeError::new_err(format!("Failed to open redb: {}", e)))?;
+            let temp_path = tempfile::NamedTempFile::new()
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to create temp file to check unique keys: {}", e)))?
+                .into_temp_path();
+            let db = Database::create(&temp_path).map_err(|e| PyRuntimeError::new_err(format!("Failed to open redb: {}", e)))?;
             let write_txn = db.begin_write().map_err(|e| PyRuntimeError::new_err(format!("Failed to begin transaction: {}", e)))?;
             redb_txn = Some(write_txn);
+            _temp_path = Some(temp_path);
             redb_db = Some(db);
         }
 
